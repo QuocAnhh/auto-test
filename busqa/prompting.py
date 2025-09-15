@@ -2,7 +2,6 @@ import json
 from .prompt_loader import get_criteria_descriptions
 
 def build_system_prompt_unified(rubrics_cfg: dict, brand_policy, brand_prompt_text: str) -> str:
-    """Build unified system prompt with 8 fixed criteria."""
     criteria_desc = get_criteria_descriptions()
     criteria_list = []
     
@@ -12,7 +11,6 @@ def build_system_prompt_unified(rubrics_cfg: dict, brand_policy, brand_prompt_te
     
     criteria_text = "\n".join(criteria_list)
     
-    # Build policy summary
     policy_bullets = []
     if brand_policy.forbid_phone_collect:
         policy_bullets.append("• KHÔNG được thu thập số điện thoại khách hàng")
@@ -50,7 +48,6 @@ Bạn là QA Lead đánh giá chất lượng cuộc gọi khách hàng. Sử d�
 """
 
 def get_unified_json_schema(rubrics_cfg: dict) -> dict:
-    """Get JSON schema for unified rubric system."""
     flow_types = list(rubrics_cfg.get('flows_slots', {}).keys())
     label_names = [label['label'] for label in rubrics_cfg.get('labels', [])]
     
@@ -73,7 +70,6 @@ def get_unified_json_schema(rubrics_cfg: dict) -> dict:
     }
 
 def build_user_instruction(metrics: dict, transcript: str, rubrics_cfg: dict) -> str:
-    """Build user instruction with unified criteria."""
     json_schema = get_unified_json_schema(rubrics_cfg)
     flow_types = list(rubrics_cfg.get('flows_slots', {}).keys())
     criteria_names = list(rubrics_cfg['criteria'].keys())
@@ -106,7 +102,7 @@ QUY TẮC BẮT BUỘC:
 - 'suggestions': LUÔN LUÔN cung cấp 2-3 đề xuất cải thiện (bất kể điểm số)
 """
     
-    # Extract diagnostics from metrics if available
+    # trích xuất phần diagnostics để hiển thị gọn hơn
     diagnostics = metrics.get("diagnostics", {"operational_readiness": [], "risk_compliance": []})
     
     return user_template.format(

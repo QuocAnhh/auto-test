@@ -3,22 +3,18 @@ import yaml
 from typing import Dict, Any, Tuple
 
 def load_unified_rubrics(path: str = "config/rubrics_unified.yaml") -> Dict[str, Any]:
-    """Load unified rubrics configuration and validate weights."""
     if not os.path.isabs(path):
-        # Make relative to project root
         project_root = os.path.dirname(os.path.dirname(__file__))
         path = os.path.join(project_root, path)
     
     with open(path, 'r', encoding='utf-8') as f:
         data = yaml.safe_load(f)
     
-    # Validate weights sum to approximately 1.0
     criteria = data.get('criteria', {})
     total_weight = sum(criteria.values())
     
-    if abs(total_weight - 1.0) > 0.01:  # Allow small floating point differences
+    if abs(total_weight - 1.0) > 0.01:  # cho phép một sai số nhỏ
         print(f"Warning: Total weights sum to {total_weight}, normalizing to 1.0")
-        # Normalize weights
         for key in criteria:
             criteria[key] = criteria[key] / total_weight
         data['criteria'] = criteria
@@ -26,7 +22,6 @@ def load_unified_rubrics(path: str = "config/rubrics_unified.yaml") -> Dict[str,
     return data
 
 def get_criteria_descriptions() -> Dict[str, str]:
-    """Get descriptions for each unified criteria."""
     return {
         "intent_routing": "Hiểu đúng ý định khách và định tuyến vào flow phù hợp",
         "slots_completeness": "Thu thập đầy đủ thông tin cần thiết theo flow",
@@ -39,22 +34,18 @@ def get_criteria_descriptions() -> Dict[str, str]:
     }
 
 def load_diagnostics_config(path: str = "config/diagnostics.yaml") -> Dict[str, Any]:
-    """Load diagnostics configuration and validate schema."""
     if not os.path.isabs(path):
-        # Make relative to project root
         project_root = os.path.dirname(os.path.dirname(__file__))
         path = os.path.join(project_root, path)
     
     with open(path, 'r', encoding='utf-8') as f:
         data = yaml.safe_load(f)
     
-    # Validate required sections
     if 'operational_readiness' not in data:
         raise ValueError("Missing 'operational_readiness' section in diagnostics config")
     if 'risk_compliance' not in data:
         raise ValueError("Missing 'risk_compliance' section in diagnostics config")
     
-    # Validate each diagnostic item has required fields
     for section_name in ['operational_readiness', 'risk_compliance']:
         for item in data[section_name]:
             if 'key' not in item:
@@ -62,13 +53,13 @@ def load_diagnostics_config(path: str = "config/diagnostics.yaml") -> Dict[str, 
             if 'penalty' not in item:
                 raise ValueError(f"Missing 'penalty' in {section_name} item: {item}")
             
-            # Validate penalty structure
+            # xác thực cấu trúc penalty
             penalty = item['penalty']
             for criterion, penalty_rules in penalty.items():
                 if not isinstance(penalty_rules, dict):
                     raise ValueError(f"Invalid penalty format for {item['key']}.{criterion}")
                 
-                # Check for valid penalty types
+                # kiểm tra có ít nhất một loại penalty hợp lệ
                 valid_penalty_types = {'delta', 'clamp_max'}
                 if not any(pt in penalty_rules for pt in valid_penalty_types):
                     raise ValueError(f"No valid penalty type in {item['key']}.{criterion}. Use 'delta' or 'clamp_max'")

@@ -10,7 +10,7 @@ def _first_present(d: Dict, keys: List[str], default=None):
     return default
 
 def normalize_messages(raw: Any) -> List[Message]:
-    # Ưu tiên lấy "messages", sau đó đến "data", cuối cùng là list gốc
+    # ưu tiên lấy "messages", sau đó đến "data", cuối cùng là list gốc
     if isinstance(raw, dict):
         if isinstance(raw.get("messages"), list):
             items = raw["messages"]

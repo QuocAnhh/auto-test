@@ -2,13 +2,11 @@ from typing import Dict, Any
 from .models import LLMOutput
 
 def ensure_full_criteria(result: dict, rubrics_cfg: dict) -> Dict[str, Dict[str, Any]]:
-    """Ensure all unified criteria are present; fill missing with score=0."""
     full = {}
     criteria_from_result = result.get("criteria", {})
     
     for key in rubrics_cfg['criteria'].keys():
         if key in criteria_from_result and isinstance(criteria_from_result[key], dict):
-            # normalize
             sc = float(criteria_from_result[key].get("score", 0) or 0)
             note = str(criteria_from_result[key].get("note", ""))
             full[key] = {"score": sc, "note": note}
@@ -17,7 +15,6 @@ def ensure_full_criteria(result: dict, rubrics_cfg: dict) -> Dict[str, Dict[str,
     return full
 
 def recompute_total(result: dict, rubrics_cfg: dict) -> float:
-    """Recompute total score using unified weights."""
     total = 0.0
     criteria = result.get("criteria", {})
     for k, w in rubrics_cfg['criteria'].items():
@@ -26,7 +23,6 @@ def recompute_total(result: dict, rubrics_cfg: dict) -> float:
     return round(total, 2)
 
 def label_from_score(score: float, rubrics_cfg: dict) -> str:
-    """Get label from score using unified thresholds."""
     labels = rubrics_cfg.get('labels', [])
     for label_info in labels:
         if score >= label_info['threshold']:
@@ -36,34 +32,28 @@ def label_from_score(score: float, rubrics_cfg: dict) -> str:
 
 
 def apply_policy_and_flow_penalties(result: dict, brand_policy, metrics: dict, rubrics_cfg: dict) -> dict:
-    """Apply penalties based on policy violations and flow issues."""
     criteria = result.get("criteria", {})
     
-    # Policy violations penalties
     if metrics.get("policy_violations", 0) > 0:
         if "policy_compliance" in criteria:
             criteria["policy_compliance"]["score"] = min(30, criteria["policy_compliance"]["score"])
             criteria["policy_compliance"]["note"] += " [Policy violation detected]"
     
-    # Early end call penalties  
     if metrics.get("endcall_early_hint", 0) > 0:
         if "context_flow_closure" in criteria:
             criteria["context_flow_closure"]["score"] = max(0, criteria["context_flow_closure"]["score"] - 20)
             criteria["context_flow_closure"]["note"] += " [Early end call detected]"
     
-    # Long option lists penalties
     if metrics.get("long_option_lists", 0) > 0:
         if "no_redundant_questions" in criteria:
             criteria["no_redundant_questions"]["score"] = max(0, criteria["no_redundant_questions"]["score"] - 15)
             criteria["no_redundant_questions"]["note"] += " [Long option lists detected]"
     
-    # Context reset penalties
     if metrics.get("context_resets", 0) > 0:
         if "context_flow_closure" in criteria:
             criteria["context_flow_closure"]["score"] = max(0, criteria["context_flow_closure"]["score"] - 25)
             criteria["context_flow_closure"]["note"] += " [Context resets detected]"
     
-    # TTS money reading violations
     if metrics.get("tts_money_reading_violation", 0) > 0:
         if "style_tts" in criteria:
             criteria["style_tts"]["score"] = max(0, criteria["style_tts"]["score"] - 20)
@@ -72,11 +62,9 @@ def apply_policy_and_flow_penalties(result: dict, brand_policy, metrics: dict, r
     return result
 
 def generate_auto_tags_risks(messages, transcript, metrics: dict) -> tuple:
-    """Generate automatic tags and risks based on rule-based analysis."""
     tags = set()
     risks = set()
     
-    # From metrics
     if metrics.get("repeated_questions", 0) > 0:
         tags.add("redundant_questions")
         risks.add("bot hỏi lại thông tin đã có")
@@ -101,7 +89,6 @@ def generate_auto_tags_risks(messages, transcript, metrics: dict) -> tuple:
         tags.add("tts_money_reading_violation")
         risks.add("bot đọc số tiền không đúng cách")
     
-    # Additional checks from transcript
     if "không hiểu" in transcript.lower() or "ý bạn là" in transcript.lower():
         tags.add("misunderstanding")
         risks.add("bot hiểu sai ý khách")
@@ -109,14 +96,11 @@ def generate_auto_tags_risks(messages, transcript, metrics: dict) -> tuple:
     return list(tags), list(risks)
 
 def coerce_llm_json_unified(llm_json: Any, rubrics_cfg: dict, brand_policy=None, messages=None, transcript=None, metrics=None, diagnostics_cfg=None, diagnostics_hits=None):
-    """Coerce LLM JSON output to unified format."""
-    # Basic normalization
     detected_flow = str(llm_json.get("detected_flow", "")).strip()
     crit_full = ensure_full_criteria(llm_json, rubrics_cfg)
     total = float(llm_json.get("total_score", 0.0) or 0.0)
     recalculated = recompute_total({"criteria": crit_full}, rubrics_cfg)
     
-    # Use recalculated if LLM calculation differs significantly
     if abs(recalculated - total) > 0.1:
         total = recalculated
     
@@ -135,15 +119,12 @@ def coerce_llm_json_unified(llm_json: Any, rubrics_cfg: dict, brand_policy=None,
         "suggestions": llm_json.get("suggestions", []) or [],
     }
     
-    # Apply policy and flow penalties
     if brand_policy and metrics:
         normalized = apply_policy_and_flow_penalties(normalized, brand_policy, metrics, rubrics_cfg)
     
-    # Apply diagnostics penalties
     if diagnostics_cfg and diagnostics_hits:
         normalized = apply_diagnostics_penalties(normalized, diagnostics_cfg, diagnostics_hits)
         
-        # Add diagnostics-based tags and risks
         all_hits = []
         all_hits.extend(diagnostics_hits.get("operational_readiness", []))
         all_hits.extend(diagnostics_hits.get("risk_compliance", []))
@@ -154,17 +135,14 @@ def coerce_llm_json_unified(llm_json: Any, rubrics_cfg: dict, brand_policy=None,
         for hit in all_hits:
             hit_key = hit["key"]
             
-            # Add specific tags based on diagnostic types
             if hit_key in ["fare_math_inconsistent", "double_room_rule_violation"]:
                 diag_tags.add("knowledge_violation")
             
             if hit_key in ["forbidden_phone_collect", "promise_hold_seat", "payment_policy_violation", "pdpa_consent_missing"]:
                 diag_tags.add("policy_violation")
             
-            # Add diagnostic-specific tags
             diag_tags.add(f"diag_{hit_key}")
             
-            # Add corresponding risks
             if hit_key == "forbidden_phone_collect":
                 diag_risks.add("thu thập SĐT trái chính sách")
             elif hit_key == "child_policy_miss":
@@ -179,12 +157,10 @@ def coerce_llm_json_unified(llm_json: Any, rubrics_cfg: dict, brand_policy=None,
         normalized["tags"] = list(diag_tags)
         normalized["risks"] = list(diag_risks)
     
-    # Recalculate total after all penalties
     if brand_policy and metrics or (diagnostics_cfg and diagnostics_hits):
         normalized["total_score"] = recompute_total(normalized, rubrics_cfg)
         normalized["label"] = label_from_score(normalized["total_score"], rubrics_cfg)
     
-    # Merge with auto-generated tags and risks from existing metrics
     if messages is not None and transcript is not None and metrics is not None:
         auto_tags, auto_risks = generate_auto_tags_risks(messages, transcript, metrics)
         normalized["tags"] = list(set(normalized.get("tags", [])) | set(auto_tags))
@@ -193,29 +169,23 @@ def coerce_llm_json_unified(llm_json: Any, rubrics_cfg: dict, brand_policy=None,
     return LLMOutput(**normalized)
 
 def apply_diagnostics_penalties(result: dict, diagnostics_cfg: dict, diagnostics_hits: dict) -> dict:
-    """Apply penalties based on diagnostic hits."""
     criteria = result.get("criteria", {})
     
-    # Process both operational_readiness and risk_compliance hits
     all_hits = []
     all_hits.extend(diagnostics_hits.get("operational_readiness", []))
     all_hits.extend(diagnostics_hits.get("risk_compliance", []))
     
-    # Apply penalties for each hit
     for hit in all_hits:
         hit_key = hit["key"]
         hit_evidence = hit["evidence"]
         
-        # Find penalty configuration for this hit
         penalty_config = None
         
-        # Search in operational_readiness
         for item in diagnostics_cfg.get("operational_readiness", []):
             if item["key"] == hit_key:
                 penalty_config = item["penalty"]
                 break
         
-        # Search in risk_compliance if not found
         if not penalty_config:
             for item in diagnostics_cfg.get("risk_compliance", []):
                 if item["key"] == hit_key:
@@ -223,9 +193,8 @@ def apply_diagnostics_penalties(result: dict, diagnostics_cfg: dict, diagnostics
                     break
         
         if not penalty_config:
-            continue  # Skip if no penalty config found
+            continue
         
-        # Apply penalties to affected criteria
         for criterion, penalty_rules in penalty_config.items():
             if criterion not in criteria:
                 continue
@@ -233,20 +202,17 @@ def apply_diagnostics_penalties(result: dict, diagnostics_cfg: dict, diagnostics
             current_score = float(criteria[criterion]["score"])
             current_note = criteria[criterion]["note"]
             
-            # Apply delta penalty
             if "delta" in penalty_rules:
                 delta = penalty_rules["delta"]
                 new_score = max(0, min(100, current_score + delta))
                 criteria[criterion]["score"] = new_score
             
-            # Apply clamp_max penalty
             if "clamp_max" in penalty_rules:
                 clamp_max = penalty_rules["clamp_max"]
                 if current_score > clamp_max:
                     criteria[criterion]["score"] = float(clamp_max)
             
-            # Update note with diagnostic evidence
-            evidence_summary = "; ".join(hit_evidence[:2])  # Limit to first 2 pieces of evidence
+            evidence_summary = "; ".join(hit_evidence[:2])
             diag_note = f"Diag: {hit_key} — evidence: {evidence_summary}"
             
             if current_note and current_note != "missing":

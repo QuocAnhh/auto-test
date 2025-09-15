@@ -10,7 +10,7 @@ class Message(BaseModel):
 
 class LLMOutput(BaseModel):
     version: str
-    detected_flow: str = ""  # Changed from detected_intent to detected_flow
+    detected_flow: str = ""  # thay đổi từ flow_id sang detected_flow
     confidence: float = 0.0
     criteria: Dict[str, Dict[str, Any]] = Field(default_factory=dict)
     total_score: float = 0.0
