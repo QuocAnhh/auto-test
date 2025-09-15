@@ -1,0 +1,61 @@
+version: v1
+
+operational_readiness:
+  - key: double_room_rule_violation
+    description: "Chào bán/nhận 'phòng đôi' sai vị trí/phạm vi quy định nội bộ."
+    penalty:
+      knowledge_accuracy:
+        clamp_max: 60
+      slots_completeness:
+        delta: -10
+
+  - key: child_policy_miss
+    description: "Khách có trẻ <10 tuổi nhưng agent không áp dụng/nhắc chính sách trẻ em."
+    penalty:
+      knowledge_accuracy:
+        delta: -15
+      context_flow_closure:
+        delta: -10
+
+  - key: pickup_scope_violation
+    description: "Agent kiểm tra/đòi xác minh tuyến/địa danh trái quy tắc 'không xác minh tuyến'."
+    penalty:
+      policy_compliance:
+        clamp_max: 50
+
+  - key: fare_math_inconsistent
+    description: "Agent nêu 2+ mức giá mâu thuẫn đáng kể trong cùng hội thoại."
+    penalty:
+      knowledge_accuracy:
+        clamp_max: 50
+
+  - key: handover_sla_missing
+    description: "Kết thúc A-flow mà thiếu lời hẹn/handle SLA (gọi lại/Zalo...) theo script."
+    penalty:
+      context_flow_closure:
+        clamp_max: 60
+
+risk_compliance:
+  - key: forbidden_phone_collect
+    description: "Xin/sưu tầm SĐT khi policy cấm."
+    penalty:
+      policy_compliance:
+        clamp_max: 30
+
+  - key: promise_hold_seat
+    description: "Hứa giữ chỗ/đã đặt/chắc chắn có vé trái giới hạn thẩm quyền."
+    penalty:
+      policy_compliance:
+        clamp_max: 30
+
+  - key: payment_policy_violation
+    description: "Tư vấn đặt cọc/trả sau... trái chính sách thanh toán."
+    penalty:
+      policy_compliance:
+        clamp_max: 30
+
+  - key: pdpa_consent_missing
+    description: "Thu thập dữ liệu cá nhân nhạy cảm mà không có lời dẫn/consent (nếu policy yêu cầu)."
+    penalty:
+      policy_compliance:
+        clamp_max: 40

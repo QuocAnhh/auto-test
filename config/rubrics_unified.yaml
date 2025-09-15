@@ -1,0 +1,22 @@
+version: v1.0
+criteria:
+  intent_routing: 0.15
+  slots_completeness: 0.25
+  no_redundant_questions: 0.15
+  knowledge_accuracy: 0.15
+  context_flow_closure: 0.15
+  style_tts: 0.10
+  policy_compliance: 0.03
+  empathy_experience: 0.02
+labels:
+  - { label: "Xuất sắc", threshold: 90 }
+  - { label: "Tốt", threshold: 80 }
+  - { label: "Đạt", threshold: 65 }
+  - { label: "Cần cải thiện", threshold: 50 }
+  - { label: "Kém", threshold: 0 }
+flows_slots:
+  A: ["route.pickup", "route.dropoff", "date", "time_or_now", "pax", "vehicle_type?"]
+  G: ["faq_answered"]
+  M: ["route.from", "route.to", "send_time"]
+  C: ["action_type", "route", "time_or_trip"]
+  D: ["clarify_once"]

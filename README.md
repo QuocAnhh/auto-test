@@ -1,54 +1,136 @@
-# Bus QA LLM Evaluator (Modular)
+# Bus QA LLM Evaluator - Unified Rubric System v1.0
 
-Project đa file để chấm điểm hội thoại nhà xe bằng LLM.
+**Chỉ sử dụng một bộ tiêu chí chung** (8 tiêu chí cố định) cho mọi nhà xe. Brand chỉ là tri thức & policy.
 
-## Tính năng
-- Nhập `conversation_id` → gọi API `GET /api/conversations/<id>/messages` từ `BASE_URL`
-- Chuẩn hoá transcript, tính metrics (latency, số lượt trao đổi...)
-- Gọi LLM (OpenAI-compatible) với prompt **rõ ràng + JSON Schema** để chấm điểm theo **rubrics nghiệp vụ**:
-  - Đặt vé / Đổi vé / Hủy vé / Đổi chỗ / Hỏi thông tin
-- Kết quả: điểm từng tiêu chí (0–100), điểm tổng (weighted), nhãn xếp hạng, rủi ro, gợi ý cải thiện
-- UI Streamlit, có nút tải JSON kết quả
+## Tính năng chính
+- **Unified Rubric**: 8 tiêu chí cố định cho tất cả nhà xe
+- **Brand as Knowledge**: Mỗi brand chỉ cung cấp tri thức, flow và policy (không định nghĩa tiêu chí riêng)
+- **Rule-based Metrics**: Phát hiện tự động các vấn đề (không dựa vào latency nếu null)
+- **Policy Enforcement**: Tự động áp dụng penalty khi vi phạm policy
+- **Streamlit UI + CLI**: Giao diện web và command line
 
-## Cách chạy nhanh
+## 8 Tiêu chí chung (Unified Rubric v1.0)
+1. **intent_routing** (15%): Hiểu đúng ý định khách và định tuyến vào flow phù hợp
+2. **slots_completeness** (25%): Thu thập đầy đủ thông tin cần thiết theo flow  
+3. **no_redundant_questions** (15%): Không hỏi lại thông tin đã có hoặc không cần thiết
+4. **knowledge_accuracy** (15%): Cung cấp thông tin chính xác về lịch trình, giá vé, chính sách
+5. **context_flow_closure** (15%): Duy trì ngữ cảnh và kết thúc cuộc gọi hợp lý
+6. **style_tts** (10%): Phong cách giao tiếp và đọc số liệu phù hợp
+7. **policy_compliance** (3%): Tuân thủ chính sách công ty và quy định
+8. **empathy_experience** (2%): Thể hiện sự đồng cảm và tạo trải nghiệm tích cực
+
+## Hệ thống Diagnostics (Chẩn đoán Vệ tinh)
+
+Hệ thống diagnostics tự động phát hiện các lỗi nghiệp vụ và tuân thủ, sau đó áp dụng "điểm trừ thông minh" vào 8 tiêu chí hiện có.
+
+### 2 Nhóm Diagnostics
+
+**Operational Readiness (Sẵn sàng Nghiệp vụ):**
+- `double_room_rule_violation`: Chào bán phòng đôi sai vị trí quy định
+- `child_policy_miss`: Không áp dụng chính sách trẻ em khi có trẻ <10 tuổi
+- `pickup_scope_violation`: Xác minh tuyến khi policy cấm
+- `fare_math_inconsistent`: Nêu giá vé mâu thuẫn (chênh >20%)
+- `handover_sla_missing`: Kết thúc thiếu cam kết SLA
+
+**Risk Compliance (Tuân thủ Rủi ro):**
+- `forbidden_phone_collect`: Thu thập SĐT khi policy cấm
+- `promise_hold_seat`: Hứa giữ chỗ trái thẩm quyền
+- `payment_policy_violation`: Tư vấn thanh toán trái chính sách
+- `pdpa_consent_missing`: Thu thập dữ liệu thiếu consent
+
+### Cách hoạt động
+
+1. **Rule-based Detection**: Phát hiện tự động bằng heuristic (ưu tiên tránh False Positive)
+2. **Smart Penalties**: Ánh xạ điểm trừ vào tiêu chí liên quan:
+   - `delta`: Cộng/trừ điểm trực tiếp
+   - `clamp_max`: Giới hạn điểm tối đa
+3. **Evidence-based**: Mỗi hit có bằng chứng (trích dẫn turn cụ thể)
+4. **Configurable**: Dễ mở rộng qua `config/diagnostics.yaml`
+
+### Bật/Tắt Diagnostics
+
+**UI**: Checkbox "Apply diagnostic penalties" trong sidebar
+**CLI**: Flag `--apply-diagnostics` / `--no-diagnostics`
+
+Khi tắt: Vẫn hiển thị hit nhưng không áp phạt điểm.
+
+## Cách chạy
+
+### Streamlit UI
 ```bash
 pip install -r requirements.txt
+export GEMINI_API_KEY=your_api_key_here
 streamlit run app.py
 ```
 
-- Nhập `BASE_URL` (mặc định: `http://103.141.140.243:14496`)
-- Nhập `conversation_id`
-- (Tuỳ chọn) Headers JSON nếu API cần xác thực
-- Nhập `LLM API Key`, `Model` (ví dụ `gpt-4o-mini`), và (tuỳ chọn) `LLM Base URL` nếu bạn dùng cổng nội bộ.
+1. Chọn brand (son_hai hoặc phuong_trang)
+2. Nhập `conversation_id`
+3. Nhấn "Chấm điểm" → tự động sử dụng Unified Rubric System
 
-## Cấu trúc
+### CLI
+```bash
+python evaluate_cli.py \
+  --conversation-id "conv_123" \
+  --brand-prompt-path "brands/son_hai/prompt.md" \
+  --output "result.json" \
+  --verbose
+```
+
+## Cấu trúc Project
 ```
 bus_qa_llm_project/
-├─ app.py                 # UI Streamlit
-├─ requirements.txt
-├─ README.md
+├─ app.py                      # Streamlit UI với Unified Rubric
+├─ evaluate_cli.py            # CLI evaluation tool
+├─ config/
+│  └─ rubrics_unified.yaml    # ⭐ Unified Rubric config (8 tiêu chí chung)
+├─ brands/                    # ⭐ Brand prompts (tri thức + policy)
+│  ├─ son_hai/prompt.md      
+│  └─ phuong_trang/prompt.md
 ├─ busqa/
-│  ├─ __init__.py
-│  ├─ models.py          # Pydantic models
-│  ├─ api_client.py      # Gọi API hội thoại
-│  ├─ normalize.py       # Chuẩn hoá transcript
-│  ├─ metrics.py         # Tính latency/turns
-│  ├─ rubrics.py         # Bộ tiêu chí (weights)
-│  ├─ prompting.py       # System/User prompts + JSON Schema
-│  ├─ llm_client.py      # OpenAI-compatible client + retries
-│  ├─ evaluator.py       # Hợp nhất: build prompt → gọi LLM → validate → fill missing keys
-│  └─ utils.py           # Tiện ích
+│  ├─ prompt_loader.py       # ⭐ Load unified rubrics
+│  ├─ brand_specs.py         # ⭐ Brand policy dataclass
+│  ├─ prompting.py           # ⭐ Unified system/user prompts
+│  ├─ evaluator.py           # ⭐ Unified coercion + penalties
+│  ├─ metrics.py             # Rule-based metrics (no latency if null)
+│  └─ (other modules...)
 └─ tests/
-   └─ smoke_test.py
+   └─ test_unified_rubric.py  # Unified system tests
 ```
 
-## Ghi chú về Prompting
-- **System prompt** quy định rõ intent hợp lệ, nguyên tắc chấm, thang điểm, cách dùng metrics, cách phạt nếu thiếu dữ kiện.
-- **User instruction** chèn **JSON Schema** cụ thể: bắt buộc `criteria` phải chứa ĐẦY ĐỦ các tiêu chí của rubric theo intent đã chọn.
-- **LLM** được yêu cầu `response_format={"type":"json_object"}` để chắc chắn trả JSON.
-- Trên app có validate + điền mặc định 0 điểm cho tiêu chí thiếu, rồi tính lại weighted total, đảm bảo tính nhất quán.
+## Cách thêm Brand mới
 
-## Mở rộng
-- Xuất .xlsx tổng hợp nhiều conversation_id
-- Rule-based fallback khi LLM lỗi
-- Thêm dashboard tổng hợp team/agent theo tuần
+1. Tạo thư mục `brands/<brand_name>/`
+2. Tạo file `prompt.md` với front-matter:
+
+```yaml
+---
+brand_id: "new_brand"
+policies:
+  forbid_phone_collect: true    # Cấm thu thập SĐT
+  require_fixed_greeting: false # Bắt buộc chào cố định
+  ban_full_summary: true        # Cấm tóm tắt toàn bộ
+  max_prompted_openers: 1       # Giới hạn gợi ý mở đầu
+tts:
+  read_money_in_words: true     # Bắt buộc đọc tiền bằng chữ
+---
+
+# Brand Knowledge & Flow Content
+(Tri thức về tuyến xe, giá vé, chính sách, flow giao tiếp...)
+```
+
+3. Brand **KHÔNG định nghĩa** tiêu chí mới - chỉ ảnh hưởng điểm `knowledge_accuracy`, `policy_compliance`, `context_flow_closure`
+
+## Unified System Logic
+
+- **Rubric**: 8 tiêu chí cố định từ `config/rubrics_unified.yaml`
+- **Brand**: Chỉ cung cấp tri thức + policy flags
+- **Metrics**: Rule-based detection (redundant questions, policy violations, etc.)
+- **Penalties**: Tự động áp dụng khi phát hiện vi phạm
+- **Output**: Luôn có đủ 8 tiêu chí, điểm tổng theo unified weights
+
+## Acceptance Test
+
+Cùng 1 transcript nhưng chạy với 2 brand khác nhau:
+- ✅ **Bộ tiêu chí giống hệt nhau** (8 tiêu chí)
+- ✅ Chỉ điểm `knowledge_accuracy`/`policy_compliance` khác nhau
+- ✅ Điểm tổng tính theo cùng 1 formula
