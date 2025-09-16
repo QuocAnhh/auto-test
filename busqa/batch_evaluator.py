@@ -15,53 +15,62 @@ from .llm_client import call_llm
 from .evaluator import coerce_llm_json_unified
 from .utils import cleanup_memory, monitor_memory_usage
 from .diagnostics import detect_operational_readiness, detect_risk_compliance
+from .parsers import extract_bot_id
+from .brand_resolver import BrandResolver
 
 logger = logging.getLogger(__name__)
 
 @dataclass
 class BatchConfig:
     """Config cho batch evaluation tối ưu 50 conv"""
-    max_concurrency: int = 25  # Tăng từ 15 lên 25 cho 50 conv
+    max_concurrency: int = 15  # Giảm xuống 15 để ổn định hơn
     chunk_size: int = 10       # Chia nhỏ để control memory
-    llm_timeout: float = 30.0  # Timeout cho mỗi LLM call
+    llm_timeout: float = 60.0  # Tăng timeout lên 60s
     memory_cleanup_interval: int = 15  # Cleanup sau 15 conv
     progress_callback: Optional[callable] = None
 
 class HighSpeedBatchEvaluator:
-    """Batch evaluator tối ưu cho 50 conversations song song"""
+    """Batch evaluator tối ưu cho 50 conversations song song với multi-brand support"""
     
     def __init__(self, config: BatchConfig = None):
         self.config = config or BatchConfig()
-        self.system_prompt_cache = {}  # Cache system prompts
+        self.system_prompt_cache = {}  # Cache system prompts theo brand
         self.processed_count = 0
+        self.brand_stats = {}  # Thống kê theo brand
         
     async def evaluate_batch(
         self, 
         conversation_ids: List[str],
         base_url: str,
         rubrics_cfg: dict,
-        brand_policy: BrandPolicy,
-        brand_prompt_text: str,
-        llm_api_key: str,
+        brand_policy: BrandPolicy = None,
+        brand_prompt_text: str = None,
+        llm_api_key: str = None,
         llm_model: str = "gemini-2.5-flash",
         temperature: float = 0.2,
         llm_base_url: str = None,
         apply_diagnostics: bool = True,
-        diagnostics_cfg: dict = None
+        diagnostics_cfg: dict = None,
+        brand_resolver: BrandResolver = None
     ) -> List[Dict[str, Any]]:
-        """Main entry point - chấm điểm batch với tốc độ cao"""
+        """Main entry point - chấm điểm batch với tốc độ cao, hỗ trợ multi-brand"""
         
         start_time = time.time()
         total_count = len(conversation_ids)
         
-        logger.info(f"🚀 Bắt đầu chấm {total_count} conv với concurrency={self.config.max_concurrency}")
+        # Determine mode
+        is_multi_brand = brand_resolver is not None
+        mode_str = "multi-brand" if is_multi_brand else "single-brand"
         
-        # Pre-build system prompt để cache
-        system_prompt_key = self._get_system_prompt_key(brand_policy, brand_prompt_text)
-        if system_prompt_key not in self.system_prompt_cache:
-            self.system_prompt_cache[system_prompt_key] = build_system_prompt_unified(
-                rubrics_cfg, brand_policy, brand_prompt_text
-            )
+        logger.info(f"🚀 Bắt đầu chấm {total_count} conv ({mode_str}) với concurrency={self.config.max_concurrency}")
+        
+        # Pre-build system prompt để cache (chỉ cho single-brand mode)
+        if not is_multi_brand:
+            system_prompt_key = self._get_system_prompt_key(brand_policy, brand_prompt_text)
+            if system_prompt_key not in self.system_prompt_cache:
+                self.system_prompt_cache[system_prompt_key] = build_system_prompt_unified(
+                    rubrics_cfg, brand_policy, brand_prompt_text
+                )
         
         # Chia nhỏ conversations thành chunks để tránh overload
         chunks = [conversation_ids[i:i + self.config.chunk_size] 
@@ -76,7 +85,7 @@ class HighSpeedBatchEvaluator:
             chunk_results = await self._process_chunk_async(
                 chunk, base_url, rubrics_cfg, brand_policy, brand_prompt_text,
                 llm_api_key, llm_model, temperature, llm_base_url,
-                apply_diagnostics, diagnostics_cfg
+                apply_diagnostics, diagnostics_cfg, brand_resolver
             )
             
             all_results.extend(chunk_results)
@@ -99,6 +108,11 @@ class HighSpeedBatchEvaluator:
         logger.info(f"✅ Hoàn thành {success_count}/{total_count} trong {elapsed:.1f}s")
         logger.info(f"Tốc độ: {success_count/elapsed:.1f} conv/s")
         
+        # Log brand usage stats cho multi-brand mode
+        if is_multi_brand and self.brand_stats:
+            brand_summary = ", ".join([f"{brand}={count}" for brand, count in self.brand_stats.items()])
+            logger.info(f"Brand usage: {brand_summary}")
+        
         return all_results
     
     async def _process_chunk_async(
@@ -113,7 +127,8 @@ class HighSpeedBatchEvaluator:
         temperature: float,
         llm_base_url: str,
         apply_diagnostics: bool,
-        diagnostics_cfg: dict
+        diagnostics_cfg: dict,
+        brand_resolver: BrandResolver = None
     ) -> List[Dict[str, Any]]:
         """Process một chunk conversations song song"""
         
@@ -127,7 +142,8 @@ class HighSpeedBatchEvaluator:
                             self._evaluate_single_fast,
                             conv_id, base_url, rubrics_cfg, brand_policy,
                             brand_prompt_text, llm_api_key, llm_model,
-                            temperature, llm_base_url, apply_diagnostics, diagnostics_cfg
+                            temperature, llm_base_url, apply_diagnostics, diagnostics_cfg,
+                            brand_resolver
                         ),
                         timeout=self.config.llm_timeout
                     )
@@ -164,13 +180,38 @@ class HighSpeedBatchEvaluator:
         temperature: float,
         llm_base_url: str,
         apply_diagnostics: bool,
-        diagnostics_cfg: dict
+        diagnostics_cfg: dict,
+        brand_resolver: BrandResolver = None
     ) -> Dict[str, Any]:
-        """Evaluate single conversation - tối ưu tốc độ"""
+        """Evaluate single conversation - tối ưu tốc độ với multi-brand support"""
         
         try:
+            # Timing debug
+            start_time = time.time()
+            
             # Fetch data nhanh
             raw_data = fetch_messages(base_url, conversation_id)
+            fetch_time = time.time() - start_time
+            
+            # Resolve brand nếu có brand_resolver
+            if brand_resolver:
+                bot_id = extract_bot_id(raw_data)
+                try:
+                    brand_prompt_text, brand_policy = brand_resolver.resolve_by_bot_id(bot_id)
+                    
+                    # Track brand stats
+                    # Lấy brand_id từ resolution để stats
+                    try:
+                        resolved_brand_id, _ = brand_resolver._map.resolve(bot_id)
+                        self.brand_stats[resolved_brand_id] = self.brand_stats.get(resolved_brand_id, 0) + 1
+                    except:
+                        pass  # Không để stats làm crash
+                        
+                except Exception as e:
+                    logger.warning(f"Failed to resolve brand for conv {conversation_id} (bot_id={bot_id}): {e}")
+                    # Re-raise để báo lỗi cho conversation này
+                    raise ValueError(f"Brand resolution failed: {e}")
+            
             messages = normalize_messages(raw_data)
             
             if not messages:
@@ -204,12 +245,18 @@ class HighSpeedBatchEvaluator:
             
             # Get cached system prompt
             system_prompt_key = self._get_system_prompt_key(brand_policy, brand_prompt_text)
+            if system_prompt_key not in self.system_prompt_cache:
+                # Build system prompt if not cached
+                self.system_prompt_cache[system_prompt_key] = build_system_prompt_unified(
+                    rubrics_cfg, brand_policy, brand_prompt_text
+                )
             system_prompt = self.system_prompt_cache[system_prompt_key]
             
             # Build user prompt
             user_prompt = build_user_instruction(metrics_for_llm, transcript, rubrics_cfg)
             
             # Call LLM với timeout
+            llm_start = time.time()
             llm_response = call_llm(
                 api_key=llm_api_key,
                 model=llm_model,
@@ -218,6 +265,7 @@ class HighSpeedBatchEvaluator:
                 base_url=llm_base_url,
                 temperature=temperature
             )
+            llm_time = time.time() - llm_start
             
             # Process result
             diagnostics_hits = metrics.get("diagnostics", {}) if apply_diagnostics else {}
@@ -233,9 +281,23 @@ class HighSpeedBatchEvaluator:
                 diagnostics_hits=diagnostics_hits
             )
             
+            total_time = time.time() - start_time
+            logger.debug(f"Conv {conversation_id}: fetch={fetch_time:.1f}s, llm={llm_time:.1f}s, total={total_time:.1f}s")
+            
+            # Extract brand_id for reporting
+            brand_id = "unknown"
+            if brand_resolver:
+                try:
+                    bot_id = extract_bot_id(raw_data)
+                    resolved_brand_id, _ = brand_resolver._map.resolve(bot_id)
+                    brand_id = resolved_brand_id
+                except:
+                    pass  # Keep default "unknown"
+            
             # Return minimal result để tiết kiệm memory
             return {
                 "conversation_id": conversation_id,
+                "brand_id": brand_id,  # Add brand_id for PDF/CSV reporting
                 "result": result.model_dump(),
                 "metrics": metrics,
                 "evaluation_timestamp": datetime.utcnow().isoformat() + "Z",
@@ -243,34 +305,39 @@ class HighSpeedBatchEvaluator:
             }
             
         except Exception as e:
-            logger.error(f"Error evaluating {conversation_id}: {e}")
+            # Better error logging with traceback
+            import traceback
+            error_msg = f"{str(e)}"
+            logger.error(f"Error evaluating {conversation_id}: {error_msg}")
+            logger.debug(f"Full traceback for {conversation_id}: {traceback.format_exc()}")
             return {
                 "conversation_id": conversation_id,
-                "error": str(e),
+                "error": error_msg,
                 "evaluation_timestamp": datetime.utcnow().isoformat() + "Z"
             }
     
     def _get_system_prompt_key(self, brand_policy: BrandPolicy, brand_prompt_text: str) -> str:
-        """Tạo cache key cho system prompt"""
-        policy_hash = hash(str(brand_policy.__dict__)) if brand_policy else 0
-        text_hash = hash(brand_prompt_text)
-        return f"{policy_hash}_{text_hash}"
+        """Tạo cache key cho system prompt - sử dụng abs() để tránh số âm"""
+        policy_hash = abs(hash(str(brand_policy.__dict__))) if brand_policy else 0
+        text_hash = abs(hash(brand_prompt_text)) if brand_prompt_text else 0
+        return f"prompt_{policy_hash}_{text_hash}"
 
 # Convenience function cho CLI
 async def evaluate_conversations_high_speed(
     conversation_ids: List[str],
     base_url: str,
     rubrics_cfg: dict,
-    brand_policy: BrandPolicy,
-    brand_prompt_text: str,
-    llm_api_key: str,
+    brand_policy: BrandPolicy = None,
+    brand_prompt_text: str = None,
+    llm_api_key: str = None,
     llm_model: str = "gemini-2.5-flash",
     temperature: float = 0.2,
     llm_base_url: str = None,
     apply_diagnostics: bool = True,
     diagnostics_cfg: dict = None,
-    max_concurrency: int = 25,
-    progress_callback: callable = None
+    max_concurrency: int = 15,  # Giảm default xuống 15 cho stability
+    progress_callback: callable = None,
+    brand_resolver: BrandResolver = None
 ) -> List[Dict[str, Any]]:
     """High-level API cho batch evaluation nhanh"""
     
@@ -284,5 +351,5 @@ async def evaluate_conversations_high_speed(
     return await evaluator.evaluate_batch(
         conversation_ids, base_url, rubrics_cfg, brand_policy,
         brand_prompt_text, llm_api_key, llm_model, temperature,
-        llm_base_url, apply_diagnostics, diagnostics_cfg
+        llm_base_url, apply_diagnostics, diagnostics_cfg, brand_resolver
     )

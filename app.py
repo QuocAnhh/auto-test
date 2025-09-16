@@ -3,15 +3,22 @@ import asyncio
 from datetime import datetime
 from io import BytesIO
 import base64
+import sys
+import os
+from pathlib import Path
 
 import streamlit as st
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 import matplotlib.pyplot as plt
+import numpy as np
 from matplotlib.backends.backend_pdf import PdfPages
-import os
+from collections import defaultdict
 from dotenv import load_dotenv
+
+# Add project root to path
+sys.path.insert(0, str(Path(__file__).parent))
 
 from busqa.api_client import fetch_messages
 from busqa.normalize import normalize_messages, build_transcript
@@ -25,9 +32,6 @@ from busqa.utils import safe_parse_headers
 from busqa.aggregate import make_summary, generate_insights
 
 # Import evaluation functions from CLI
-import sys
-from pathlib import Path
-sys.path.insert(0, str(Path(__file__).parent))
 from evaluate_cli import evaluate_conversation, evaluate_conversations_batch
 
 DEFAULT_BASE_URL = "http://103.141.140.243:14496"
@@ -230,22 +234,57 @@ def display_export_options(results, summary):
         st.markdown("**📊 CSV Summary**")
         st.markdown("Tabular summary for spreadsheet analysis")
         
-        # Create CSV data
+        # Create enhanced CSV data with brand info and detailed metrics
         csv_data = []
         for result in results:
             if "error" not in result:
+                # Extract brand info
+                brand_id = result.get("brand_id", "unknown")
+                if brand_id == "unknown":
+                    brand_id = result.get("result", {}).get("detected_flow", "unknown")
+                
                 row = {
                     "conversation_id": result["conversation_id"],
+                    "brand_id": brand_id,
                     "detected_flow": result["result"]["detected_flow"],
                     "total_score": result["result"]["total_score"],
                     "label": result["result"]["label"],
-                    "confidence": result["result"]["confidence"],
+                    "confidence": result["result"].get("confidence", 0),
+                    "final_comment": result["result"].get("final_comment", ""),
                     "policy_violations": result["metrics"].get("policy_violations", 0),
                 }
                 
-                # Add criteria scores
+                # Add criteria scores with notes
                 for criterion, details in result["result"]["criteria"].items():
-                    row[f"{criterion}_score"] = details["score"]
+                    if isinstance(details, dict):
+                        row[f"{criterion}_score"] = details.get("score", 0)
+                        row[f"{criterion}_note"] = details.get("note", "")
+                    else:
+                        row[f"{criterion}_score"] = 0
+                        row[f"{criterion}_note"] = "missing"
+                
+                # Add key metrics
+                metrics = result.get("metrics", {})
+                row.update({
+                    "repeated_questions": metrics.get("repeated_questions", 0),
+                    "context_resets": metrics.get("context_resets", 0),
+                    "long_option_lists": metrics.get("long_option_lists", 0),
+                    "endcall_early_hint": metrics.get("endcall_early_hint", 0),
+                    "agent_user_ratio": metrics.get("agent_user_ratio", 0),
+                    "first_response_latency": metrics.get("first_response_latency_seconds", 0),
+                    "total_turns": metrics.get("total_turns", 0),
+                })
+                
+                # Add diagnostics summary if available
+                diagnostics = metrics.get("diagnostics", {})
+                if diagnostics:
+                    diag_summary = []
+                    for issue_type, hits in diagnostics.items():
+                        if hits:
+                            diag_summary.append(f"{issue_type}({len(hits)})")
+                    row["diagnostics_summary"] = "; ".join(diag_summary) if diag_summary else "none"
+                else:
+                    row["diagnostics_summary"] = "none"
                 
                 csv_data.append(row)
         
@@ -265,95 +304,752 @@ def display_export_options(results, summary):
         st.markdown("Comprehensive report with charts")
         
         try:
-            pdf_data = create_pdf_report(results, summary)
-            st.download_button(
-                label="Download PDF",
-                data=pdf_data,
-                file_name=f"batch_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf",
-                mime="application/pdf"
-            )
+            # Add timeout protection for PDF generation
+            if len(results) > 30:
+                st.warning("⚠️ Large batch detected. PDF generation may be slow or timeout. Consider using HTML report instead.")
+            
+            with st.spinner("Generating PDF report... (this may take a moment)"):
+                pdf_data = create_pdf_report(results, summary)
+                st.download_button(
+                    label="Download PDF",
+                    data=pdf_data,
+                    file_name=f"batch_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf",
+                    mime="application/pdf"
+                )
         except Exception as e:
-            st.error(f"PDF generation failed: {e}")
-            # Fallback to HTML
-            html_data = create_html_report(results, summary)
-            st.download_button(
-                label="Download HTML Report",
-                data=html_data,
-                file_name=f"batch_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.html",
-                mime="text/html"
-            )
+            st.error(f"PDF generation failed: {str(e)}")
+            st.info("🔄 Falling back to HTML report...")
+            try:
+                html_data = create_html_report(results, summary)
+                st.download_button(
+                    label="Download HTML Report",
+                    data=html_data,
+                    file_name=f"batch_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.html",
+                    mime="text/html"
+                )
+            except Exception as html_e:
+                st.error(f"HTML report generation also failed: {str(html_e)}")
+                st.markdown("**Manual Export:** Please use CSV export above.")
 
 
 def create_pdf_report(results, summary):
-    """Create a PDF report using matplotlib and reportlab."""
+    """Create PDF report - simplified for large batches to avoid timeout."""
     from reportlab.lib.pagesizes import letter, A4
-    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
+    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, Image, PageBreak, KeepTogether
     from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-    from reportlab.lib.units import inch
+    from reportlab.lib.units import inch, cm
     from reportlab.lib import colors
+    from collections import defaultdict
+    
+    # Determine report complexity based on result count
+    result_count = len(results) if results else 0
+    is_large_batch = result_count > 25
+    
+    print(f"Creating PDF report for {result_count} results (large_batch: {is_large_batch})")
     
     # Create PDF in memory
     buffer = BytesIO()
-    doc = SimpleDocTemplate(buffer, pagesize=A4)
+    doc = SimpleDocTemplate(buffer, pagesize=A4, leftMargin=0.7*inch, rightMargin=0.7*inch, topMargin=0.8*inch, bottomMargin=0.8*inch)
     styles = getSampleStyleSheet()
     
-    # Build story
+    # Enhanced custom styles
+    title_style = ParagraphStyle('CustomTitle', parent=styles['Title'], fontSize=26, textColor=colors.darkblue, spaceAfter=25, alignment=1)
+    heading1_style = ParagraphStyle('CustomH1', parent=styles['Heading1'], fontSize=18, textColor=colors.darkgreen, spaceAfter=15, spaceBefore=25)
+    heading2_style = ParagraphStyle('CustomH2', parent=styles['Heading2'], fontSize=15, textColor=colors.darkblue, spaceAfter=10, spaceBefore=15)
+    heading3_style = ParagraphStyle('CustomH3', parent=styles['Heading3'], fontSize=13, textColor=colors.purple, spaceAfter=8, spaceBefore=12)
+    small_text = ParagraphStyle('SmallText', parent=styles['Normal'], fontSize=8, textColor=colors.darkgrey)
+    bullet_style = ParagraphStyle('BulletStyle', parent=styles['Normal'], fontSize=10, leftIndent=15, bulletIndent=10)
+    
     story = []
     
-    # Title
-    title_style = ParagraphStyle('CustomTitle', parent=styles['Title'], fontSize=24, textColor=colors.darkblue)
-    story.append(Paragraph("Bus QA Evaluation Batch Report", title_style))
-    story.append(Spacer(1, 12))
+    # 1. ENHANCED TITLE PAGE
+    story.append(Paragraph("QA LLM Evaluation System", title_style))
+    story.append(Paragraph("Ultra-Detailed Batch Analysis Report", styles['Heading2']))
+    story.append(Spacer(1, 20))
+    story.append(Paragraph(f"Generated on: {datetime.now().strftime('%A, %B %d, %Y at %H:%M:%S')}", styles['Normal']))
+    story.append(Paragraph(f"Total Conversations Analyzed: <b>{summary['count']}</b> | Success Rate: <b>{summary['successful_count']/summary['count']*100:.1f}%</b>", styles['Normal']))
+    story.append(Spacer(1, 40))
     
-    # Summary
-    story.append(Paragraph("Executive Summary", styles['Heading1']))
-    story.append(Paragraph(f"Total Conversations: {summary['count']}", styles['Normal']))
-    story.append(Paragraph(f"Successful Evaluations: {summary['successful_count']}", styles['Normal']))
-    story.append(Paragraph(f"Average Score: {summary['avg_total_score']:.1f}/100", styles['Normal']))
-    story.append(Paragraph(f"Policy Violation Rate: {summary['policy_violation_rate']:.1%}", styles['Normal']))
-    story.append(Spacer(1, 12))
+    # Table of Contents
+    story.append(Paragraph("📑 Table of Contents", heading2_style))
+    toc_data = [
+        ["Section", "Description"],
+        ["Executive Summary", "High-level metrics and KPIs"],
+        ["Brand Analysis", "Performance breakdown by brand"],
+        ["Visual Analytics", "Charts and data visualizations"],
+        ["Criteria Deep Dive", "Detailed scoring analysis"],
+        ["Individual Conversations", "Complete conversation breakdowns"],
+        ["Diagnostic Analysis", "Risk and compliance issues"],
+        ["Raw Data Export", "Detailed tabular data"]
+    ]
     
-    # Insights
-    insights = generate_insights(summary)
-    if insights:
-        story.append(Paragraph("Key Insights", styles['Heading1']))
-        for insight in insights:
-            story.append(Paragraph(f"• {insight}", styles['Normal']))
-        story.append(Spacer(1, 12))
+    toc_table = Table(toc_data, colWidths=[2.5*inch, 4*inch])
+    toc_table.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, 0), colors.navy),
+        ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+        ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+        ('FONTSIZE', (0, 0), (-1, -1), 9),
+        ('BACKGROUND', (0, 1), (-1, -1), colors.lightgrey),
+        ('GRID', (0, 0), (-1, -1), 1, colors.black),
+    ]))
+    story.append(toc_table)
+    story.append(PageBreak())
     
-    # Results table
-    story.append(Paragraph("Results Summary", styles['Heading1']))
-    table_data = [["Conversation ID", "Flow", "Score", "Label"]]
+    # 2. ENHANCED EXECUTIVE SUMMARY
+    story.append(Paragraph("📊 Executive Summary", heading1_style))
     
-    for result in results[:10]:  # Limit to first 10 for PDF
+    # Safe key metrics extraction
+    count = summary.get('count', 0)
+    successful_count = summary.get('successful_count', 0)
+    avg_total_score = summary.get('avg_total_score', 0)
+    policy_violation_rate = summary.get('policy_violation_rate', 0)
+    
+    # Safe percentage calculation
+    success_rate = (successful_count / count * 100) if count > 0 else 0
+    
+    exec_data = [
+        ["Key Performance Indicator", "Value", "Status"],
+        ["Total Conversations Processed", str(count), "✓ Complete"],
+        ["Successful Evaluations", f"{successful_count} ({success_rate:.1f}%)", "✓ High Success Rate" if success_rate > 90 else "⚠ Review Needed"],
+        ["Average Quality Score", f"{avg_total_score:.1f}/100", "✓ Good" if avg_total_score >= 70 else "⚠ Below Target"],
+        ["Policy Violation Rate", f"{policy_violation_rate:.1%}", "✓ Low Risk" if policy_violation_rate < 0.1 else "⚠ High Risk"],
+    ]
+    
+    # Add more metrics if available (with safe checks)
+    latency_stats = summary.get('latency_stats', {})
+    if latency_stats and latency_stats.get('avg_first_response'):
+        avg_first_response = latency_stats['avg_first_response']
+        exec_data.append(["Avg First Response Time", f"{avg_first_response:.1f}s", "✓ Fast" if avg_first_response < 5 else "⚠ Slow"])
+    
+    criteria_avg = summary.get('criteria_avg', {})
+    if criteria_avg and len(criteria_avg) > 0:
+        worst_criterion = min(criteria_avg.items(), key=lambda x: float(x[1] or 0))
+        best_criterion = max(criteria_avg.items(), key=lambda x: float(x[1] or 0))
+        exec_data.append(["Best Performing Criterion", f"{best_criterion[0]} ({best_criterion[1]:.1f})", "✓ Strong"])
+        exec_data.append(["Weakest Criterion", f"{worst_criterion[0]} ({worst_criterion[1]:.1f})", "⚠ Needs Attention"])
+    
+    exec_table = Table(exec_data, colWidths=[3*inch, 2*inch, 1.5*inch])
+    exec_table.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, 0), colors.darkblue),
+        ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+        ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+        ('FONTSIZE', (0, 0), (-1, 0), 11),
+        ('FONTSIZE', (0, 1), (-1, -1), 9),
+        ('BACKGROUND', (0, 1), (-1, -1), colors.lightblue),
+        ('GRID', (0, 0), (-1, -1), 1, colors.black),
+        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+    ]))
+    story.append(exec_table)
+    story.append(Spacer(1, 25))
+    
+    # 3. COMPREHENSIVE BRAND ANALYSIS
+    story.append(Paragraph("🏢 Comprehensive Brand Analysis", heading1_style))
+    
+    # Group results by brand with better logic
+    brand_groups = defaultdict(list)
+    for result in results:
         if "error" not in result:
-            table_data.append([
-                result["conversation_id"][:20],  # Truncate long IDs
-                result["result"]["detected_flow"],
-                f"{result['result']['total_score']:.1f}",
-                result["result"]["label"]
-            ])
+            # Ultra-safe brand extraction with comprehensive fallbacks
+            brand_id = result.get("brand_id")
+            if not brand_id or brand_id == "unknown" or str(brand_id).strip() == "":
+                # Try multiple fallback methods
+                brand_id = result.get("metadata", {}).get("brand_id")
+                if not brand_id:
+                    brand_id = result.get("result", {}).get("detected_flow")
+                if not brand_id:
+                    brand_id = result.get("bot_id")
+                if not brand_id:
+                    brand_id = "unknown"
+            # Convert to string and ensure it's never None/empty
+            brand_id = str(brand_id or "unknown").strip() or "unknown"
+            brand_groups[brand_id].append(result)
     
-    table = Table(table_data)
-    table.setStyle(TableStyle([
-        ('BACKGROUND', (0, 0), (-1, 0), colors.grey),
+    # Enhanced brand summary with more metrics
+    brand_summary_data = [["Brand ID", "Convs", "Avg Score", "Score Range", "Policy Violations", "Top Label", "Avg Confidence"]]
+    
+    for brand_id, brand_results in brand_groups.items():
+        conv_count = len(brand_results)
+        
+        # Safe score extraction
+        scores = []
+        for r in brand_results:
+            score = r.get("result", {}).get("total_score")
+            if score is not None and isinstance(score, (int, float)):
+                scores.append(float(score))
+        
+        if scores:
+            avg_score = sum(scores) / len(scores)
+            min_score = min(scores)
+            max_score = max(scores)
+        else:
+            avg_score = min_score = max_score = 0
+        
+        policy_violations = sum(1 for r in brand_results if r.get("metrics", {}).get("policy_violations", 0) > 0)
+        
+        # Safe label extraction
+        labels = []
+        for r in brand_results:
+            label = r.get("result", {}).get("label")
+            if label:
+                labels.append(str(label))
+        top_label = max(set(labels), key=labels.count) if labels else "N/A"
+        
+        # Safe confidence extraction
+        confidences = []
+        for r in brand_results:
+            conf = r.get("result", {}).get("confidence")
+            if conf is not None and isinstance(conf, (int, float)):
+                confidences.append(float(conf))
+        avg_confidence = sum(confidences) / len(confidences) if confidences else 0
+        
+        brand_summary_data.append([
+            brand_id,
+            str(conv_count),
+            f"{avg_score:.1f}",
+            f"{min_score:.0f}-{max_score:.0f}",
+            f"{policy_violations}/{conv_count}",
+            top_label,
+            f"{avg_confidence:.2f}"
+        ])
+    
+    brand_table = Table(brand_summary_data, colWidths=[1.2*inch, 0.6*inch, 0.8*inch, 0.8*inch, 0.8*inch, 1*inch, 0.8*inch])
+    brand_table.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, 0), colors.darkgreen),
         ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
         ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
         ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-        ('FONTSIZE', (0, 0), (-1, 0), 12),
-        ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
-        ('BACKGROUND', (0, 1), (-1, -1), colors.beige),
-        ('GRID', (0, 0), (-1, -1), 1, colors.black)
+        ('FONTSIZE', (0, 0), (-1, -1), 8),
+        ('BACKGROUND', (0, 1), (-1, -1), colors.lightgreen),
+        ('GRID', (0, 0), (-1, -1), 1, colors.black),
     ]))
+    story.append(brand_table)
+    story.append(Spacer(1, 20))
     
-    story.append(table)
+    # Per-brand detailed breakdown
+    for brand_id, brand_results in brand_groups.items():
+        story.append(Paragraph(f"🔍 Brand Deep Dive: {brand_id or 'Unknown'}", heading2_style))
+        
+        # Brand-specific insights
+        scores = [r["result"]["total_score"] for r in brand_results]
+        
+        insights_data = [
+            ["Metric", "Value", "Analysis"],
+            ["Conversations Count", str(len(brand_results)), "Sample size"],
+            ["Score Average", f"{sum(scores)/len(scores):.1f}", "Quality baseline"],
+            ["Score Std Dev", f"{(sum((x - sum(scores)/len(scores))**2 for x in scores)/len(scores))**0.5:.1f}", "Consistency measure"],
+            ["Best Conversation", f"{max(scores):.1f} pts", "Peak performance"],
+            ["Worst Conversation", f"{min(scores):.1f} pts", "Improvement opportunity"]
+        ]
+        
+        # Add criteria breakdown for this brand
+        brand_criteria = defaultdict(list)
+        for result in brand_results:
+            if "criteria" in result.get("result", {}):
+                for criterion, details in result["result"]["criteria"].items():
+                    score = details.get("score", 0) if isinstance(details, dict) else 0
+                    brand_criteria[criterion].append(score)
+        
+        if brand_criteria:
+            worst_criterion = min(brand_criteria.items(), key=lambda x: sum(x[1])/len(x[1]))
+            best_criterion = max(brand_criteria.items(), key=lambda x: sum(x[1])/len(x[1]))
+            insights_data.extend([
+                ["Strongest Criterion", f"{best_criterion[0]} ({sum(best_criterion[1])/len(best_criterion[1]):.1f})", "Competitive advantage"],
+                ["Weakest Criterion", f"{worst_criterion[0]} ({sum(worst_criterion[1])/len(worst_criterion[1]):.1f})", "Focus area"]
+            ])
+        
+        insights_table = Table(insights_data, colWidths=[2*inch, 1.5*inch, 3*inch])
+        insights_table.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), colors.orange),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+            ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 0), (-1, 0), 8),
+            ('BACKGROUND', (0, 1), (-1, -1), colors.wheat),
+            ('GRID', (0, 0), (-1, -1), 1, colors.black),
+        ]))
+        story.append(insights_table)
+        story.append(Spacer(1, 15))
     
-    # Build PDF
+    story.append(PageBreak())
+    
+    # 4. VISUAL ANALYTICS WITH CHARTS (Skip for large batches to avoid timeout)
+    if not is_large_batch:
+        story.append(Paragraph("📊 Visual Analytics & Charts", heading1_style))
+        
+        # Generate and insert charts
+        charts = create_charts_for_pdf(results, summary)
+    else:
+        story.append(Paragraph("📊 Visual Analytics", heading1_style))
+        story.append(Paragraph("Chart generation skipped for large batch to ensure performance. Use smaller batches for charts.", styles['Normal']))
+        charts = []
+    
+    for chart_name, chart_buffer in charts:
+        try:
+            # Create Image object from buffer
+            chart_image = Image(chart_buffer, width=6.5*inch, height=4*inch)
+            chart_image.hAlign = 'CENTER'
+            
+            # Add chart title and image - safe handling
+            chart_name_safe = str(chart_name or "chart")
+            if chart_name_safe == 'simple_brand_scores':
+                story.append(Paragraph("Brand Performance Summary", heading2_style))
+            else:
+                story.append(Paragraph("Analytics Chart", heading2_style))
+            
+            story.append(chart_image)
+            story.append(Spacer(1, 15))
+            
+        except Exception as e:
+            print(f"Warning: Could not add chart {chart_name_safe}: {e}")
+    
+    story.append(PageBreak())
+    
+    # 5. KEY INSIGHTS WITH CONTEXT
+    insights = generate_insights(summary)
+    if insights:
+        story.append(Paragraph("💡 Strategic Insights & Recommendations", heading1_style))
+        for i, insight in enumerate(insights, 1):
+            story.append(Paragraph(f"<b>{i}.</b> {insight}", bullet_style))
+        story.append(Spacer(1, 20))
+    
+    # 5. ULTRA-DETAILED CRITERIA ANALYSIS
+    story.append(Paragraph("📈 Ultra-Detailed Criteria Performance Analysis", heading1_style))
+    
+    # Aggregate criteria scores with advanced stats
+    criteria_scores = defaultdict(list)
+    criteria_notes = defaultdict(list)
+    
+    for result in results:
+        if "error" not in result and "criteria" in result.get("result", {}):
+            for criterion, details in result["result"]["criteria"].items():
+                if isinstance(details, dict):
+                    score = details.get("score", 0)
+                    note = details.get("note", "")
+                    criteria_scores[criterion].append(score)
+                    if note and note != "missing":
+                        criteria_notes[criterion].append(note)
+    
+    # Enhanced criteria performance table
+    criteria_data = [["Criterion", "Avg", "Min", "Max", "StdDev", "Count", "Pass Rate", "Common Issues"]]
+    
+    for criterion, scores in criteria_scores.items():
+        if scores:
+            avg_score = sum(scores) / len(scores)
+            min_score = min(scores)
+            max_score = max(scores)
+            std_dev = (sum((x - avg_score) ** 2 for x in scores) / len(scores)) ** 0.5
+            pass_rate = sum(1 for s in scores if s >= 70) / len(scores) * 100  # Assuming 70 is pass threshold
+            
+            # Analyze common issues from notes
+            notes = criteria_notes.get(criterion, [])
+            if notes:
+                # Get most common words in notes (simple analysis)
+                all_words = " ".join(notes).lower().split()
+                word_freq = defaultdict(int)
+                for word in all_words:
+                    if len(word) > 3:  # Filter short words
+                        word_freq[word] += 1
+                common_issues = ", ".join([word for word, count in sorted(word_freq.items(), key=lambda x: x[1], reverse=True)[:3]])
+            else:
+                common_issues = "None reported"
+            
+            criteria_data.append([
+                criterion.replace("_", " ").title(),
+                f"{avg_score:.1f}",
+                f"{min_score:.1f}",
+                f"{max_score:.1f}",
+                f"{std_dev:.1f}",
+                str(len(scores)),
+                f"{pass_rate:.1f}%",
+                common_issues[:30] + "..." if len(common_issues) > 30 else common_issues
+            ])
+    
+    if len(criteria_data) > 1:
+        criteria_table = Table(criteria_data, colWidths=[1.5*inch, 0.5*inch, 0.4*inch, 0.4*inch, 0.5*inch, 0.4*inch, 0.6*inch, 1.7*inch])
+        criteria_table.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), colors.purple),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+            ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 0), (-1, 0), 7),
+            ('BACKGROUND', (0, 1), (-1, -1), colors.lavender),
+            ('GRID', (0, 0), (-1, -1), 1, colors.black),
+        ]))
+        story.append(criteria_table)
+        story.append(Spacer(1, 20))
+    
+    story.append(PageBreak())
+    
+    # 6. INDIVIDUAL CONVERSATION DETAILS (Skip detailed breakdown for large batches)
+    if not is_large_batch:
+        story.append(Paragraph("📋 Individual Conversation Analysis", heading1_style))
+        story.append(Paragraph("Complete breakdown of each conversation with full details", styles['Normal']))
+        story.append(Spacer(1, 15))
+        
+        for brand_id, brand_results in brand_groups.items():
+            # Process conversation details (existing code continues here)
+            pass
+    else:
+        story.append(Paragraph("📋 Conversation Summary", heading1_style))
+        story.append(Paragraph("Detailed conversation breakdown skipped for large batch to ensure performance. Key metrics are included in summary sections above.", styles['Normal']))
+        story.append(Spacer(1, 15))
+    
+    # Skip the detailed conversation loop for large batches
+    if not is_large_batch:
+        for brand_id, brand_results in brand_groups.items():
+            story.append(Paragraph(f"🏢 Brand: {brand_id or 'Unknown'}", heading2_style))
+            
+            for i, result in enumerate(brand_results[:20], 1):  # Show up to 20 per brand
+                # Safe data extraction
+                conv_id = str(result.get("conversation_id", "unknown"))
+                eval_result = result.get("result", {})
+                metrics = result.get("metrics", {})
+            
+                
+                # Conversation header
+                story.append(Paragraph(f"Conversation #{i}: {conv_id}", heading3_style))
+                
+                # Safe metric extraction
+                detected_flow = str(eval_result.get("detected_flow", "unknown"))
+                total_score = eval_result.get("total_score", 0)
+                total_score = float(total_score) if total_score is not None else 0
+                label = str(eval_result.get("label", "unknown"))
+                confidence = eval_result.get("confidence", 0)
+                confidence = float(confidence) if confidence is not None else 0
+            
+            # Main metrics in a compact table
+            main_data = [
+                ["Attribute", "Value", "Assessment"],
+                ["Detected Flow", detected_flow, "✓ Identified"],
+                ["Total Score", f"{total_score:.1f}/100", "✓ Good" if total_score >= 70 else "⚠ Needs Improvement"],
+                ["Quality Label", label, "Assessment Result"],
+                ["Confidence", f"{confidence:.1%}", "✓ High" if confidence > 0.8 else "⚠ Low"],
+                ["Policy Violations", str(metrics.get("policy_violations", 0)), "✓ Clean" if metrics.get("policy_violations", 0) == 0 else "⚠ Issues Found"]
+            ]
+            
+            # Add key metrics if available (with safe extraction)
+            first_response_latency = metrics.get("first_response_latency_seconds")
+            if first_response_latency is not None:
+                try:
+                    latency_val = float(first_response_latency)
+                    main_data.append(["Response Latency", f"{latency_val:.1f}s", "✓ Fast" if latency_val < 5 else "⚠ Slow"])
+                except (ValueError, TypeError):
+                    pass
+            if "total_turns" in metrics:
+                main_data.append(["Total Turns", str(metrics.get("total_turns", 0)), "Conversation Length"])
+            
+            main_table = Table(main_data, colWidths=[1.5*inch, 1.5*inch, 2*inch])
+            main_table.setStyle(TableStyle([
+                ('BACKGROUND', (0, 0), (-1, 0), colors.darkblue),
+                ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+                ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+                ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+                ('FONTSIZE', (0, 0), (-1, 0), 8),
+                ('BACKGROUND', (0, 1), (-1, -1), colors.lightblue),
+                ('GRID', (0, 0), (-1, -1), 1, colors.black),
+            ]))
+            story.append(main_table)
+            story.append(Spacer(1, 10))
+            
+            # Detailed criteria breakdown
+            if "criteria" in eval_result:
+                story.append(Paragraph("Criteria Detailed Breakdown:", small_text))
+                
+                criteria_detail_data = [["Criterion", "Score", "Weight", "Contribution", "Notes"]]
+                
+                # Load rubrics to get weights (simplified approach)
+                criterion_weights = {
+                    "completeness": 0.25, "accuracy": 0.25, "helpfulness": 0.20, 
+                    "politeness": 0.15, "efficiency": 0.15  # Default weights
+                }
+                
+                for criterion, details in eval_result["criteria"].items():
+                    if isinstance(details, dict):
+                        # Safe extraction with type checking
+                        score_raw = details.get("score", 0)
+                        score = float(score_raw) if score_raw is not None else 0
+                        
+                        note = str(details.get("note", "No notes") or "No notes")
+                        weight = criterion_weights.get(str(criterion), 0.2)  # Default weight
+                        contribution = score * weight
+                        
+                        # Truncate long notes
+                        display_note = note[:50] + "..." if len(note) > 50 else note
+                        
+                        criteria_detail_data.append([
+                            criterion.replace("_", " ").title(),
+                            f"{score:.1f}",
+                            f"{weight:.1%}",
+                            f"{contribution:.1f}",
+                            display_note
+                        ])
+                
+                criteria_detail_table = Table(criteria_detail_data, colWidths=[1.2*inch, 0.6*inch, 0.6*inch, 0.8*inch, 2.3*inch])
+                criteria_detail_table.setStyle(TableStyle([
+                    ('BACKGROUND', (0, 0), (-1, 0), colors.green),
+                    ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+                    ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+                    ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+                    ('FONTSIZE', (0, 0), (-1, 0), 7),
+                    ('BACKGROUND', (0, 1), (-1, -1), colors.lightgreen),
+                    ('GRID', (0, 0), (-1, -1), 1, colors.black),
+                ]))
+                story.append(criteria_detail_table)
+                story.append(Spacer(1, 10))
+            
+            # Final comment and additional info
+            if eval_result.get("final_comment"):
+                story.append(Paragraph(f"<b>Final Assessment:</b> {eval_result['final_comment']}", small_text))
+            
+            # Tags, risks, suggestions
+            additional_info = []
+            if eval_result.get("tags"):
+                additional_info.append(f"<b>Tags:</b> {', '.join(eval_result['tags'])}")
+            if eval_result.get("risks"):
+                additional_info.append(f"<b>Risks:</b> {', '.join(eval_result['risks'])}")
+            if eval_result.get("suggestions"):
+                additional_info.append(f"<b>Suggestions:</b> {', '.join(eval_result['suggestions'][:2])}")  # Limit suggestions
+            
+            for info in additional_info:
+                story.append(Paragraph(info, small_text))
+            
+            # Diagnostics if available
+            diagnostics = metrics.get("diagnostics", {})
+            if diagnostics:
+                diag_summary = []
+                for issue_type, hits in diagnostics.items():
+                    if hits:
+                        diag_summary.append(f"{issue_type}({len(hits)})")
+                
+                if diag_summary:
+                    story.append(Paragraph(f"<b>Diagnostic Issues:</b> {'; '.join(diag_summary)}", small_text))
+            
+            story.append(Spacer(1, 15))
+            
+            # Add page break every 3 conversations to avoid crowding
+            if i % 3 == 0 and i < len(brand_results):
+                story.append(PageBreak())
+    
+    story.append(PageBreak())
+    
+    # 7. ENHANCED DIAGNOSTICS ANALYSIS
+    diagnostics_summary = summary.get("diagnostics_top", {})
+    if diagnostics_summary:
+        story.append(Paragraph("🔍 Comprehensive Diagnostics & Risk Analysis", heading1_style))
+        
+        # Enhanced diagnostics table with impact analysis
+        diag_data = [["Issue Type", "Occurrences", "Affected Rate", "Severity", "Recommendation"]]
+        
+        for issue_type, count in diagnostics_summary.items():
+            affected_rate = count / summary['count'] * 100
+            
+            # Determine severity based on frequency
+            if affected_rate > 20:
+                severity = "🔴 Critical"
+                recommendation = "Immediate action required"
+            elif affected_rate > 10:
+                severity = "🟠 High" 
+                recommendation = "Prioritize for resolution"
+            elif affected_rate > 5:
+                severity = "🟡 Medium"
+                recommendation = "Monitor and improve"
+            else:
+                severity = "🟢 Low"
+                recommendation = "Track for trends"
+            
+            diag_data.append([
+                issue_type.replace("_", " ").title(),
+                str(count),
+                f"{affected_rate:.1f}%",
+                severity,
+                recommendation
+            ])
+        
+        if len(diag_data) > 1:
+            diag_table = Table(diag_data, colWidths=[2*inch, 0.8*inch, 0.8*inch, 1*inch, 2*inch])
+            diag_table.setStyle(TableStyle([
+                ('BACKGROUND', (0, 0), (-1, 0), colors.red),
+                ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+                ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+                ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+                ('FONTSIZE', (0, 0), (-1, -1), 8),
+                ('BACKGROUND', (0, 1), (-1, -1), colors.mistyrose),
+                ('GRID', (0, 0), (-1, -1), 1, colors.black),
+            ]))
+            story.append(diag_table)
+    
+    # 8. RAW DATA EXPORT SECTION
+    story.append(PageBreak())
+    story.append(Paragraph("📊 Complete Data Export", heading1_style))
+    story.append(Paragraph("This section contains all raw evaluation data in tabular format for further analysis.", styles['Normal']))
+    story.append(Spacer(1, 15))
+    
+    # Create comprehensive data table
+    export_data = [["Conv ID", "Brand", "Flow", "Score", "Label", "Confidence", "Violations", "Main Issues"]]
+    
+    for result in results:
+        if "error" not in result:
+            # Ultra-safe data extraction
+            conv_id = str(result.get("conversation_id", "unknown"))[-15:]
+            
+            # Safe brand_id extraction
+            brand_id = result.get("brand_id")
+            if not brand_id:
+                brand_id = result.get("result", {}).get("detected_flow")
+            brand_id = str(brand_id or "unknown")
+            
+            # Safe field extraction with defaults
+            flow = str(result.get("result", {}).get("detected_flow", "unknown"))
+            total_score = result.get("result", {}).get("total_score", 0)
+            score = f"{float(total_score):.1f}" if total_score is not None else "0.0"
+            label = str(result.get("result", {}).get("label", "unknown"))
+            
+            confidence_val = result.get("result", {}).get("confidence", 0)
+            confidence = f"{float(confidence_val):.2f}" if confidence_val is not None else "0.00"
+            
+            violations = str(result.get("metrics", {}).get("policy_violations", 0))
+            
+            # Summarize main issues
+            issues = []
+            criteria = result.get("result", {}).get("criteria", {})
+            if criteria:
+                low_scores = [k for k, v in criteria.items() if isinstance(v, dict) and v.get("score", 100) < 60]
+                if low_scores:
+                    issues.append(f"Low: {', '.join(low_scores[:2])}")
+            
+            diagnostics = result.get("metrics", {}).get("diagnostics", {})
+            if diagnostics:
+                diag_count = sum(len(hits) for hits in diagnostics.values())
+                if diag_count > 0:
+                    issues.append(f"Diag: {diag_count}")
+            
+            main_issues = "; ".join(issues) if issues else "None"
+            
+            export_data.append([conv_id, brand_id, flow, score, label, confidence, violations, main_issues])
+    
+    # Split into multiple tables if too large
+    max_rows_per_table = 25
+    for i in range(0, len(export_data), max_rows_per_table):
+        table_data = export_data[0:1] + export_data[i+1:i+max_rows_per_table+1]  # Header + chunk
+        if len(table_data) > 1:  # Has data beyond header
+            export_table = Table(table_data, colWidths=[1*inch, 0.8*inch, 0.8*inch, 0.5*inch, 0.8*inch, 0.6*inch, 0.5*inch, 1.5*inch])
+            export_table.setStyle(TableStyle([
+                ('BACKGROUND', (0, 0), (-1, 0), colors.darkgrey),
+                ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+                ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+                ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+                ('FONTSIZE', (0, 0), (-1, -1), 7),
+                ('BACKGROUND', (0, 1), (-1, -1), colors.lightgrey),
+                ('GRID', (0, 0), (-1, -1), 1, colors.black),
+            ]))
+            story.append(export_table)
+            story.append(Spacer(1, 15))
+    
+    # 9. ENHANCED FOOTER WITH METADATA
+    story.append(Spacer(1, 20))
+    footer_style = ParagraphStyle('Footer', parent=styles['Normal'], fontSize=8, textColor=colors.grey, alignment=1)
+    
+    # Generate report metadata
+    successful_brands = len([bg for bg in brand_groups.values() if len(bg) > 0])
+    total_criteria_evaluated = sum(len(r.get("result", {}).get("criteria", {})) for r in results if "error" not in r)
+    
+    # Safe metadata generation
+    count = summary.get('count', 0)
+    successful_count = summary.get('successful_count', 0)
+    policy_checks = sum(1 for r in results if r.get('metrics', {}).get('policy_violations', 0) > 0)
+    
+    metadata_text = f"""
+    📋 Report Metadata:<br/>
+    • Generated by: QA LLM Evaluator v2.0<br/>
+    • Total Conversations: {count} | Successful: {successful_count} | Brands: {successful_brands}<br/>
+    • Criteria Evaluations: {total_criteria_evaluated} | Policy Checks: {policy_checks}<br/>
+    • Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} | Format: Ultra-Detailed PDF Report
+    """
+    
+    story.append(Paragraph(metadata_text, footer_style))
+    
+    # Build the PDF
     doc.build(story)
     buffer.seek(0)
     
     return buffer.getvalue()
 
+
+def create_charts_for_pdf(results, summary):
+    """Create ultra-simplified charts for PDF integration - optimized to avoid timeout."""
+    charts = []
+    
+    # Skip chart generation completely if results are empty or more than 20 (to avoid timeout)
+    if not results or len(results) > 20:
+        print(f"Skipping chart generation: {len(results) if results else 0} results")
+        return charts
+    
+    try:
+        import matplotlib.pyplot as plt
+        from io import BytesIO
+        from collections import defaultdict
+        
+        # Ultra-minimal matplotlib config for maximum speed
+        plt.style.use('default')
+        plt.rcParams.update({'font.size': 8, 'figure.facecolor': 'white'})
+        
+        # Only create ONE simple chart to minimize processing time
+        brand_scores = defaultdict(list)
+        
+        for result in results:
+            if "error" not in result:
+                # Safe brand_id extraction with multiple fallbacks
+                brand_id = result.get("brand_id") 
+                if not brand_id or brand_id == "unknown":
+                    brand_id = result.get("result", {}).get("detected_flow")
+                if not brand_id:
+                    brand_id = "Unknown"
+                
+                # Safe score extraction
+                score = result.get("result", {}).get("total_score", 0)
+                if score and isinstance(score, (int, float)):
+                    brand_scores[str(brand_id)].append(float(score))
+        
+        # Create ultra-simple bar chart if we have data
+        if brand_scores and len(brand_scores) <= 8:  # Limit brands to avoid overcrowding
+            fig, ax = plt.subplots(figsize=(8, 4))  # Smaller figure for speed
+            
+            brands = list(brand_scores.keys())[:6]  # Max 6 brands
+            brand_means = []
+            
+            for brand in brands:
+                scores = brand_scores[brand]
+                if scores:
+                    brand_means.append(sum(scores) / len(scores))
+                else:
+                    brand_means.append(0)
+            
+            # Simple bar chart
+            bars = ax.bar(brands, brand_means, color='lightblue', alpha=0.8)
+            ax.set_title('Average Scores by Brand')
+            ax.set_ylabel('Score')
+            ax.set_ylim(0, 100)
+            
+            # Add value labels (simple)
+            for bar, mean in zip(bars, brand_means):
+                if mean > 0:
+                    ax.text(bar.get_x() + bar.get_width()/2., bar.get_height() + 1,
+                           f'{mean:.0f}', ha='center', va='bottom', fontsize=8)
+            
+            plt.tight_layout()
+            buf = BytesIO()
+            plt.savefig(buf, format='png', dpi=100, bbox_inches='tight')  # Lower DPI for speed
+            buf.seek(0)
+            charts.append(('simple_brand_scores', buf))
+            plt.close()
+            
+        return charts
+        
+    except Exception as e:
+        print(f"Chart generation failed: {e}")
+        return []
 
 def create_html_report(results, summary):
     """Create an HTML report as fallback."""
@@ -423,8 +1119,8 @@ def create_html_report(results, summary):
     return html
 
 # Main Streamlit App
-st.set_page_config(page_title="Bus QA LLM Evaluator (Batch)", page_icon="🚌", layout="wide")
-st.title("🚌 Bus QA LLM Evaluator — Batch Evaluation System")
+st.set_page_config(page_title="QA LLM Evaluator (Batch)", page_icon="🚌", layout="wide")
+st.title("QA LLM Evaluator — Batch Evaluation System")
 
 load_dotenv()
 
@@ -443,12 +1139,12 @@ with st.sidebar:
     st.subheader("Conversation IDs")
     
     # Multiple input methods
-    input_method = st.radio("Input method:", ["Text Area", "File Upload"])
+    input_method = st.radio("Input method:", ["Text Area", "File Upload", "Bulk List & Evaluate"])
     
     conversation_ids = []
     if input_method == "Text Area":
         conv_ids_text = st.text_area(
-            "Conversation IDs (one per line, max 10)",
+            "Conversation IDs (one per line, max 50)",
             value="",
             height=120,
             placeholder="conv_123\nconv_456\nconv_789"
@@ -457,7 +1153,7 @@ with st.sidebar:
             lines = [line.strip() for line in conv_ids_text.strip().split('\n')]
             conversation_ids = [line for line in lines if line]
     
-    else:  # File Upload
+    elif input_method == "File Upload":
         uploaded_file = st.file_uploader(
             "Upload file with conversation IDs",
             type=['txt', 'csv'],
@@ -475,7 +1171,171 @@ with st.sidebar:
             except Exception as e:
                 st.error(f"Error reading file: {e}")
     
-    # Dedupe and limit to 10
+    elif input_method == "Bulk List & Evaluate":
+        st.subheader("🚀 Bulk List & Evaluate")
+        
+        # API Configuration for listing conversations
+        col1, col2 = st.columns(2)
+        with col1:
+            list_base_url = st.text_input("List API Base URL", value="https://live-demo.agenticai.pro.vn")
+            bot_id = st.text_input("Bot ID", placeholder="Enter bot ID to fetch conversations")
+        with col2:
+            bearer_token = st.text_input("Bearer Token", type="password", 
+                                       value=os.getenv("BEARER_TOKEN", ""),
+                                       help="Or set BEARER_TOKEN environment variable")
+            page_size = st.number_input("Page Size", min_value=10, max_value=500, value=30)
+        
+        # Show token info for debugging
+        if bearer_token:
+            st.caption(f"🔑 Token length: {len(bearer_token)} chars | Preview: {bearer_token[:10]}...")
+        else:
+            st.warning("⚠️ No bearer token provided")
+        
+        max_pages = st.number_input("Max Pages", min_value=1, max_value=50, value=5)
+        
+        # Selection Parameters
+        st.subheader("Selection Parameters")
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            take = st.number_input("Take", min_value=1, max_value=50, value=10)
+            skip = st.number_input("Skip", min_value=0, max_value=1000, value=0)
+        with col2:
+            strategy = st.selectbox("Strategy", ["head", "tail", "random", "newest", "oldest"], index=3)
+            sort_by = st.selectbox("Sort By", ["created_at", "length"], index=0)
+        with col3:
+            order = st.selectbox("Order", ["desc", "asc"], index=0)
+            min_turns = st.number_input("Min Turns", min_value=0, max_value=20, value=0)
+        
+        # Add token test button
+        if st.button("🧪 Test Bearer Token", help="Test if bearer token is valid before fetching"):
+            if not bearer_token:
+                st.error("Bearer token is required")
+            else:
+                try:
+                    from tools.bulk_list_evaluate import test_bearer_token
+                    
+                    with st.spinner("Testing bearer token..."):
+                        is_valid = test_bearer_token(list_base_url, bearer_token)
+                        
+                    if is_valid:
+                        st.success("✅ Bearer token is valid!")
+                    else:
+                        st.error("❌ Bearer token is invalid or expired")
+                        st.info("Please check your token and try again")
+                        
+                except Exception as e:
+                    st.error(f"Token test failed: {e}")
+        
+        # Fetch and select conversations
+        if st.button("🔍 Fetch & Select Conversations", type="primary"):
+            if not bot_id:
+                st.error("Bot ID is required")
+            elif not bearer_token:
+                st.error("Bearer token is required")
+            else:
+                try:
+                    # Import bulk functions
+                    from tools.bulk_list_evaluate import FetchConfig, fetch_conversations_with_messages, select_conversations, test_bearer_token
+                    
+                    # Test token first
+                    with st.spinner("Testing bearer token..."):
+                        token_valid = test_bearer_token(list_base_url, bearer_token)
+                    
+                    if not token_valid:
+                        st.error("❌ Bearer token test failed. Please check your token.")
+                        st.stop()
+                    
+                    with st.spinner("Fetching conversations from API..."):
+                        fetch_config = FetchConfig(
+                            base_url=list_base_url,
+                            bot_id=bot_id,
+                            bearer_token=bearer_token,
+                            page_size=page_size,
+                            max_pages=max_pages
+                        )
+                        
+                        conversations = fetch_conversations_with_messages(fetch_config)
+                        
+                        if not conversations:
+                            st.error("No conversations found")
+                        else:
+                            st.success(f"✅ Fetched {len(conversations)} total conversations")
+                            
+                            # Select conversations
+                            selected_conversations = select_conversations(
+                                conversations,
+                                take=take,
+                                skip=skip,
+                                strategy=strategy,
+                                sort_by=sort_by,
+                                order=order,
+                                min_turns=min_turns
+                            )
+                            
+                            if not selected_conversations:
+                                st.error("No conversations selected after filtering")
+                            else:
+                                st.success(f"✅ Selected {len(selected_conversations)} conversations")
+                                
+                                # Store in session state for evaluation
+                                st.session_state.bulk_conversations = selected_conversations
+                                
+                                # Show preview
+                                with st.expander("📋 Selected Conversations Preview"):
+                                    for i, conv in enumerate(selected_conversations[:10], 1):
+                                        conv_id = conv.get("conversation_id", "unknown")
+                                        created_at = conv.get("created_at", "unknown")
+                                        msg_count = len(conv.get("messages", []))
+                                        st.text(f"{i}. {conv_id} | {created_at} | {msg_count} messages")
+                                    
+                                    if len(selected_conversations) > 10:
+                                        st.text(f"... and {len(selected_conversations) - 10} more")
+                                
+                                # Extract conversation IDs for the rest of the flow
+                                conversation_ids = [conv.get("conversation_id") for conv in selected_conversations]
+                                
+                except Exception as e:
+                    error_msg = str(e)
+                    st.error(f"Error fetching conversations: {error_msg}")
+                    
+                    # Provide specific guidance for common errors
+                    if "401" in error_msg or "Unauthorized" in error_msg:
+                        st.error("🔐 **Authentication Error**: Bearer token is invalid or expired")
+                        st.info("**Solutions:**")
+                        st.info("1. Check if your Bearer token is correct")
+                        st.info("2. Try getting a new token from the API provider")
+                        st.info("3. Verify the token has proper permissions")
+                        st.code(f"Current token preview: {bearer_token[:20]}...")
+                    elif "403" in error_msg or "Forbidden" in error_msg:
+                        st.error("🚫 **Access Forbidden**: No permission to access this bot_id")
+                        st.info("**Solutions:**")
+                        st.info("1. Verify the bot_id is correct")
+                        st.info("2. Check if your account has access to this bot")
+                        st.info("3. Contact administrator for permissions")
+                        st.code(f"Bot ID: {bot_id}")
+                    elif "404" in error_msg:
+                        st.error("🔍 **Not Found**: Bot ID or API endpoint not found")
+                        st.info("**Solutions:**")
+                        st.info("1. Double-check the bot_id")
+                        st.info("2. Verify the API base URL is correct")
+                        st.code(f"URL: {list_base_url}/api/conversations")
+                    else:
+                        # Show detailed traceback for other errors
+                        import traceback
+                        with st.expander("Show technical details"):
+                            st.code(traceback.format_exc())
+        
+        # Use selected conversations if available
+        if hasattr(st.session_state, 'bulk_conversations') and st.session_state.bulk_conversations:
+            conversation_ids = [conv.get("conversation_id") for conv in st.session_state.bulk_conversations]
+            st.info(f"📝 Using {len(conversation_ids)} conversations from bulk selection")
+            
+            # Add button to clear bulk selection
+            if st.button("🗑️ Clear Bulk Selection"):
+                del st.session_state.bulk_conversations
+                st.rerun()
+    
+    # Dedupe and limit to 50
     if conversation_ids:
         # Remove duplicates while preserving order
         seen = set()
@@ -485,9 +1345,9 @@ with st.sidebar:
                 seen.add(id)
                 unique_ids.append(id)
         
-        if len(unique_ids) > 10:
-            st.warning(f"Found {len(unique_ids)} IDs. Limiting to first 10.")
-            unique_ids = unique_ids[:10]
+        if len(unique_ids) > 50:
+            st.warning(f"Found {len(unique_ids)} IDs. Limiting to first 50.")
+            unique_ids = unique_ids[:50]
         
         conversation_ids = unique_ids
         st.success(f"Ready to evaluate {len(conversation_ids)} conversation(s)")
@@ -499,24 +1359,67 @@ with st.sidebar:
     
     st.markdown("---")
     st.subheader("Brand Configuration")
-    brand_options = ["son_hai", "long_van"]
-    selected_brand = st.selectbox("Choose brand", brand_options)
     
-    # Load and display brand policy
-    try:
-        brand_path = f"brands/{selected_brand}/prompt.md"
-        brand_prompt_text, brand_policy = load_brand_prompt(brand_path)
+    # Brand mode selector
+    brand_mode = st.radio(
+        "Brand Mode:",
+        ["single", "auto-by-botid"],
+        help="Single: chọn 1 brand cho tất cả. Auto: tự động phân giải brand theo bot_id"
+    )
+    
+    # Initialize variables
+    brand_prompt_text = ""
+    brand_policy = None
+    brand_resolver = None
+    
+    if brand_mode == "single":
+        # Traditional single-brand mode
+        brand_options = ["son_hai", "long_van"]
+        selected_brand = st.selectbox("Choose brand", brand_options)
         
-        st.caption("**Brand Policy Flags:**")
-        st.write(f"• Cấm thu SĐT: {brand_policy.forbid_phone_collect}")
-        st.write(f"• Chào cố định: {brand_policy.require_fixed_greeting}")
-        st.write(f"• Cấm tóm tắt: {brand_policy.ban_full_summary}")
-        st.write(f"• Max openers: {brand_policy.max_prompted_openers}")
-        st.write(f"• Đọc tiền bằng chữ: {brand_policy.read_money_in_words}")
-    except Exception as e:
-        st.error(f"Error loading brand: {e}")
-        brand_prompt_text = ""
-        brand_policy = None
+        # Load and display brand policy
+        try:
+            brand_path = f"brands/{selected_brand}/prompt.md"
+            brand_prompt_text, brand_policy = load_brand_prompt(brand_path)
+            
+            st.caption("**Brand Policy Flags:**")
+            st.write(f"• Cấm thu SĐT: {brand_policy.forbid_phone_collect}")
+            st.write(f"• Chào cố định: {brand_policy.require_fixed_greeting}")
+            st.write(f"• Cấm tóm tắt: {brand_policy.ban_full_summary}")
+            st.write(f"• Max openers: {brand_policy.max_prompted_openers}")
+            st.write(f"• Đọc tiền bằng chữ: {brand_policy.read_money_in_words}")
+        except Exception as e:
+            st.error(f"Error loading brand: {e}")
+            brand_prompt_text = ""
+            brand_policy = None
+    
+    else:  # auto-by-botid mode
+        # Multi-brand mode
+        bot_map_path = st.text_input("Bot Map Path", value="config/bot_map.yaml")
+        
+        try:
+            from busqa.brand_resolver import BrandResolver
+            brand_resolver = BrandResolver(bot_map_path)
+            
+            # Show bot mapping info
+            cache_stats = brand_resolver.get_cache_stats()
+            mapped_bots = brand_resolver._map.get_all_mapped_bots()
+            
+            st.success(f"✅ Loaded bot map: {cache_stats['mapped_bots_count']} bots mapped")
+            
+            with st.expander("Bot Mapping Preview"):
+                for bot_id, brand_id in mapped_bots.items():
+                    st.text(f"Bot {bot_id} → {brand_id}")
+                
+                fallback = brand_resolver._map._fallback_brand
+                if fallback:
+                    st.caption(f"Fallback brand: {fallback}")
+            
+            st.info("🔄 Multi-brand mode: brands sẽ được tự động chọn theo bot_id từ API response")
+            
+        except Exception as e:
+            st.error(f"Error loading bot map: {e}")
+            brand_resolver = None
     
     st.markdown("---")
     st.subheader("Diagnostics Configuration")
@@ -537,14 +1440,15 @@ with st.sidebar:
     st.caption("Model: gemini-2.5-flash | API key lấy từ file .env")
     llm_base_url = st.text_input("LLM Base URL (optional)", value="", help="Để trống nếu dùng OpenAI chính thống")
     temperature = st.slider("Temperature", 0.0, 1.0, 0.2, 0.1)
-    max_concurrency = st.slider("Max Concurrency", 1, 10, 5, 1, help="Số lượng conversation xử lý song song")
+    max_concurrency = st.slider("Max Concurrency", 1, 20, 3, 1, help="Số lượng conversation xử lý song song (khuyến nghị: 3-5 cho ổn định)")
     st.markdown("---")
     max_chars = st.number_input("Giới hạn ký tự transcript", min_value=2000, max_value=200000, value=24000, step=1000)
 
 # Main evaluation section
 col1, col2 = st.columns([2, 1])
 with col1:
-    eval_button = st.button("🚀 Chấm điểm batch (tối đa 10)", disabled=not conversation_ids, type="primary")
+    mode_text = "multi-brand" if brand_mode == "auto-by-botid" else "single-brand"
+    eval_button = st.button(f"🚀 Chấm điểm batch ({mode_text}, tối đa 50)", disabled=not conversation_ids, type="primary")
 with col2:
     if st.session_state.evaluation_results:
         st.metric("Last Batch", f"{len(st.session_state.evaluation_results)} results")
@@ -574,8 +1478,12 @@ if eval_button and conversation_ids:
         st.error("Không thể load unified rubrics.")
         st.stop()
         
-    if not brand_policy:
-        st.error("Không thể load brand policy.")
+    # Validate brand configuration based on mode
+    if brand_mode == "single" and not brand_policy:
+        st.error("Không thể load brand policy cho single-brand mode.")
+        st.stop()
+    elif brand_mode == "auto-by-botid" and not brand_resolver:
+        st.error("Không thể load brand resolver cho multi-brand mode.")
         st.stop()
 
     llm_api_key = os.getenv("GEMINI_API_KEY", "")
@@ -592,56 +1500,67 @@ if eval_button and conversation_ids:
     try:
         status_text.text("Starting batch evaluation...")
         
-        # Prepare arguments for batch evaluation
-        eval_args = {
-            'base_url': base_url,
-            'brand_prompt_path': brand_path,
-            'rubrics_cfg': rubrics_cfg,
-            'brand_prompt_text': brand_prompt_text,
-            'brand_policy': brand_policy,
-            'llm_api_key': llm_api_key,
-            'llm_model': llm_model,
-            'temperature': temperature,
-            'llm_base_url': llm_base_url.strip() or None,
-            'apply_diagnostics': apply_diagnostics,
-            'diagnostics_cfg': diagnostics_cfg,
-            'max_concurrency': max_concurrency,
-            'headers': safe_parse_headers(headers_raw)
-        }
-        
-        # Run batch evaluation with progress updates
-        results = []
-        for i, conv_id in enumerate(conversation_ids):
-            progress = (i + 1) / len(conversation_ids)
+        # Progress callback for batch evaluation
+        def progress_callback(progress, current, total):
             progress_bar.progress(progress)
-            status_text.text(f"Evaluating conversation {i+1}/{len(conversation_ids)}: {conv_id}")
+            status_text.text(f"Evaluating: {current}/{total} conversations ({progress:.1%})")
+        
+        # Check if we have bulk conversations with messages already
+        if hasattr(st.session_state, 'bulk_conversations') and st.session_state.bulk_conversations:
+            # Use bulk evaluation with raw conversations (no API fetching needed)
+            status_text.text("Using bulk conversations - evaluating with raw data...")
             
-            try:
-                result = evaluate_conversation(
-                    conversation_id=conv_id,
-                    base_url=base_url,
-                    brand_prompt_path=brand_path,
-                    rubrics_cfg=rubrics_cfg,
-                    brand_prompt_text=brand_prompt_text,
-                    brand_policy=brand_policy,
-                    llm_api_key=llm_api_key,
-                    llm_model=llm_model,
-                    temperature=temperature,
-                    llm_base_url=llm_base_url.strip() or None,
-                    apply_diagnostics=apply_diagnostics,
-                    diagnostics_cfg=diagnostics_cfg
-                )
-                results.append(result)
-            except Exception as e:
-                st.error(f"Error evaluating {conv_id}: {e}")
-                results.append({
-                    "conversation_id": conv_id,
-                    "error": str(e),
-                    "evaluated_at": datetime.utcnow().isoformat() + "Z"
-                })
+            from tools.bulk_list_evaluate import evaluate_many_raw_conversations
+            
+            # For bulk mode, we only support single-brand currently
+            if brand_mode != "single":
+                st.error("Bulk List & Evaluate currently only supports single-brand mode")
+                st.stop()
+            
+            # Get brand prompt path for bulk evaluation
+            brand_prompt_path = f"brands/{selected_brand}/prompt.md"
+            
+            results = asyncio.run(evaluate_many_raw_conversations(
+                raw_conversations=st.session_state.bulk_conversations,
+                brand_prompt_path=brand_prompt_path,
+                rubrics="config/rubrics_unified.yaml",
+                model=llm_model,
+                temperature=temperature,
+                apply_diagnostics=apply_diagnostics,
+                llm_api_key=llm_api_key,
+                llm_base_url=llm_base_url.strip() or None,
+                max_concurrency=max_concurrency
+            ))
+            
+        else:
+            # Use regular high-speed batch evaluator (fetches from API)
+            from busqa.batch_evaluator import evaluate_conversations_high_speed
+            
+            results = asyncio.run(evaluate_conversations_high_speed(
+                conversation_ids=conversation_ids,
+                base_url=base_url,
+                rubrics_cfg=rubrics_cfg,
+                brand_policy=brand_policy if brand_mode == "single" else None,
+                brand_prompt_text=brand_prompt_text if brand_mode == "single" else None,
+                llm_api_key=llm_api_key,
+                llm_model=llm_model,
+                temperature=temperature,
+                llm_base_url=llm_base_url.strip() or None,
+                apply_diagnostics=apply_diagnostics,
+                diagnostics_cfg=diagnostics_cfg,
+                max_concurrency=max_concurrency,
+                progress_callback=progress_callback,
+                brand_resolver=brand_resolver if brand_mode == "auto-by-botid" else None
+            ))
         
         progress_bar.progress(1.0)
-        status_text.text("Batch evaluation completed!")
+        status_text.text("✅ Batch evaluation completed!")
+        
+        # Debug: Check results structure
+        st.write(f"Debug: Got {len(results)} results")
+        success_count = len([r for r in results if "error" not in r])
+        error_count = len([r for r in results if "error" in r])
+        st.write(f"Debug: {success_count} successful, {error_count} errors")
         
         # Generate summary
         summary = make_summary(results)
@@ -650,7 +1569,24 @@ if eval_button and conversation_ids:
         st.session_state.evaluation_results = results
         st.session_state.summary_data = summary
         
-        st.success(f"✅ Batch evaluation completed! {summary['successful_count']}/{summary['count']} successful")
+        success_msg = f"✅ Batch evaluation completed! {summary['successful_count']}/{summary['count']} successful"
+        
+        # Show brand usage stats for multi-brand mode
+        if brand_mode == "auto-by-botid" and brand_resolver:
+            try:
+                # Extract brand stats from results (simple approach)
+                brand_usage = {}
+                for result in results:
+                    if "error" not in result:
+                        # Try to get brand info from metadata if available
+                        # For now, just show that multi-brand was used
+                        pass
+                
+                success_msg += f" (Multi-brand mode)"
+            except:
+                pass
+        
+        st.success(success_msg)
         
     except Exception as e:
         st.error(f"Batch evaluation failed: {e}")
@@ -677,7 +1613,7 @@ if st.session_state.evaluation_results and st.session_state.summary_data:
                     "Total Score": f"{result['result']['total_score']:.1f}",
                     "Label": result["result"]["label"],
                     "Confidence": f"{result['result']['confidence']:.1%}",
-                    "Policy Violations": result["metrics"].get("policy_violations", 0)
+                    "Policy Violations": int(result["metrics"].get("policy_violations", 0))
                 }
                 
                 # Add criteria scores
@@ -692,35 +1628,55 @@ if st.session_state.evaluation_results and st.session_state.summary_data:
                     "Total Score": "N/A",
                     "Label": "ERROR",
                     "Confidence": "N/A",
-                    "Policy Violations": "N/A",
-                    "Error": result["error"]
+                    "Policy Violations": 0
                 })
         
+        # Display results table
         if table_data:
             df = pd.DataFrame(table_data)
-            st.dataframe(df, use_container_width=True)
+            st.dataframe(df, use_container_width=True, hide_index=True)
             
-            # Show detailed view for selected conversation
-            if len([r for r in results if "error" not in r]) > 0:
-                st.subheader("💬 Conversation Details")
-                successful_results = [r for r in results if "error" not in r]
-                conv_options = {r["conversation_id"]: r for r in successful_results}
-                
-                selected_conv = st.selectbox(
-                    "Select conversation to view details:",
-                    options=list(conv_options.keys()),
-                    format_func=lambda x: f"{x} (Score: {conv_options[x]['result']['total_score']:.1f})"
-                )
-                
-                if selected_conv:
-                    display_conversation_details(conv_options[selected_conv], rubrics_cfg)
+            # Show summary statistics
+            successful_results = [r for r in results if "error" not in r]
+            if successful_results:
+                col1, col2, col3, col4 = st.columns(4)
+                with col1:
+                    avg_score = sum(r["result"]["total_score"] for r in successful_results) / len(successful_results)
+                    st.metric("Average Score", f"{avg_score:.1f}")
+                with col2:
+                    policy_violations = sum(1 for r in successful_results if r.get("metrics", {}).get("policy_violations", 0) > 0)
+                    st.metric("Policy Violations", f"{policy_violations}/{len(successful_results)}")
+                with col3:
+                    flows = [r["result"]["detected_flow"] for r in successful_results]
+                    unique_flows = len(set(flows))
+                    st.metric("Unique Flows", str(unique_flows))
+                with col4:
+                    confidence_avg = sum(r["result"].get("confidence", 0) for r in successful_results) / len(successful_results)
+                    st.metric("Avg Confidence", f"{confidence_avg:.1%}")
+        
+        # Individual conversation details
+        if successful_results:
+            st.subheader("🔍 Individual Conversation Details")
+            selected_idx = st.selectbox(
+                "Select conversation to view details:",
+                range(len(successful_results)),
+                format_func=lambda x: f"{successful_results[x]['conversation_id']} - {successful_results[x]['result']['total_score']:.1f}pts"
+            )
+            
+            if selected_idx is not None:
+                selected_result = successful_results[selected_idx]
+                display_conversation_details(selected_result, rubrics_cfg)
     
     with tab2:
-        display_analytics(summary, results, rubrics_cfg)
+        # Analytics tab
+        if summary:
+            display_analytics(summary, results, rubrics_cfg)
+        else:
+            st.info("No analytics data available")
     
     with tab3:
-        display_export_options(results, summary)
-
-else:
-    # Show welcome message when no results
-    st.info("👋 Welcome! Enter conversation IDs in the sidebar and click '🚀 Chấm điểm batch' to start evaluation.")
+        # Export tab
+        if results and summary:
+            display_export_options(results, summary)
+        else:
+            st.info("No export data available")

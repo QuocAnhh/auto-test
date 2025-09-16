@@ -93,8 +93,22 @@ def evaluate_conversation(
             diagnostics_hits=diagnostics_hits
         )
         
+        # Extract brand_id from brand_prompt_path
+        brand_id = "unknown"
+        if brand_prompt_path:
+            import os
+            brand_parts = brand_prompt_path.split(os.sep)
+            if "brands" in brand_parts:
+                try:
+                    brand_idx = brand_parts.index("brands")
+                    if brand_idx + 1 < len(brand_parts):
+                        brand_id = brand_parts[brand_idx + 1]
+                except:
+                    pass
+        
         return {
             "conversation_id": conversation_id,
+            "brand_id": brand_id,
             "brand_prompt_path": brand_prompt_path,
             "rubric_version": rubrics_cfg["version"],
             "evaluation_timestamp": datetime.utcnow().isoformat() + "Z",
@@ -216,8 +230,16 @@ def main():
     
     # Configuration
     parser.add_argument("--base-url", default="http://103.141.140.243:14496", help="API base URL")
-    parser.add_argument("--brand-prompt-path", required=True, help="Path to brand prompt file (e.g., brands/son_hai/prompt.md)")
+    parser.add_argument("--brand-prompt-path", help="Path to brand prompt file (e.g., brands/son_hai/prompt.md) - required for single-brand mode")
     parser.add_argument("--rubrics", default="config/rubrics_unified.yaml", help="Path to unified rubrics config")
+    
+    # Multi-brand support
+    parser.add_argument("--brand-mode", choices=["single", "auto-by-botid"], default="single", 
+                       help="Brand mode: single (traditional) or auto-by-botid (multi-brand)")
+    parser.add_argument("--bot-map", default="config/bot_map.yaml", 
+                       help="Path to bot mapping config (for auto-by-botid mode)")
+    parser.add_argument("--default-brand-prompt-path", 
+                       help="Fallback brand prompt path if bot mapping fails")
     
     # LLM settings
     parser.add_argument("--llm-model", default="gemini-2.5-flash", help="LLM model to use")
@@ -237,6 +259,15 @@ def main():
     
     args = parser.parse_args()
     
+    # Validate brand mode arguments
+    if args.brand_mode == "single" and not args.brand_prompt_path:
+        print("✗ --brand-prompt-path is required when using --brand-mode=single")
+        sys.exit(1)
+    
+    if args.brand_mode == "auto-by-botid" and not os.path.exists(args.bot_map):
+        print(f"✗ Bot map file not found: {args.bot_map}")
+        sys.exit(1)
+    
     # Parse conversation IDs
     conversation_ids = parse_conversation_ids(args)
     if not conversation_ids:
@@ -246,6 +277,8 @@ def main():
     print(f"📝 Found {len(conversation_ids)} conversation(s) to evaluate:")
     for i, conv_id in enumerate(conversation_ids, 1):
         print(f"  {i}. {conv_id}")
+    
+    print(f"🔧 Brand mode: {args.brand_mode}")
     
     # Handle diagnostics flags
     apply_diagnostics = args.apply_diagnostics and not args.no_diagnostics
@@ -274,16 +307,33 @@ def main():
             print(f"✗ Error loading diagnostics config: {e}")
             apply_diagnostics = False
     
-    try:
-        brand_prompt_text, brand_policy = load_brand_prompt(args.brand_prompt_path)
-        if args.verbose:
-            print(f"✓ Loaded brand prompt: {args.brand_prompt_path}")
-            print(f"  Policy flags: phone_collect={not brand_policy.forbid_phone_collect}, "
-                  f"fixed_greeting={brand_policy.require_fixed_greeting}, "
-                  f"money_words={brand_policy.read_money_in_words}")
-    except Exception as e:
-        print(f"✗ Error loading brand prompt: {e}")
-        sys.exit(1)
+    # Initialize brand resolver or load single brand
+    brand_resolver = None
+    brand_prompt_text = None
+    brand_policy = None
+    
+    if args.brand_mode == "auto-by-botid":
+        try:
+            from busqa.brand_resolver import BrandResolver
+            brand_resolver = BrandResolver(args.bot_map)
+            if args.verbose:
+                stats = brand_resolver.get_cache_stats()
+                print(f"✓ Loaded bot mapping: {stats['mapped_bots_count']} bots mapped")
+        except Exception as e:
+            print(f"✗ Error loading bot mapping: {e}")
+            sys.exit(1)
+    else:
+        # Single brand mode
+        try:
+            brand_prompt_text, brand_policy = load_brand_prompt(args.brand_prompt_path)
+            if args.verbose:
+                print(f"✓ Loaded brand prompt: {args.brand_prompt_path}")
+                print(f"  Policy flags: phone_collect={not brand_policy.forbid_phone_collect}, "
+                      f"fixed_greeting={brand_policy.require_fixed_greeting}, "
+                      f"money_words={brand_policy.read_money_in_words}")
+        except Exception as e:
+            print(f"✗ Error loading brand prompt: {e}")
+            sys.exit(1)
     
     # Get API key
     llm_api_key = os.getenv("GEMINI_API_KEY") or os.getenv("OPENAI_API_KEY")
@@ -307,71 +357,76 @@ def main():
     
     if len(conversation_ids) == 1:
         # Single conversation - backward compatibility
-        start_time = datetime.now()
-        result = evaluate_conversation(
-            conversation_ids[0], args.base_url, args.brand_prompt_path,
-            rubrics_cfg, brand_prompt_text, brand_policy, llm_api_key,
-            args.llm_model, args.temperature, args.llm_base_url,
-            apply_diagnostics, diagnostics_cfg
-        )
-        elapsed = (datetime.now() - start_time).total_seconds()
-        
-        # Save single result
-        if args.output:
-            with open(args.output, 'w', encoding='utf-8') as f:
-                json.dump(result, f, ensure_ascii=False, indent=2)
-            print(f"✓ Result saved to {args.output} ({elapsed:.1f}s)")
-        
-        if "error" not in result:
-            print_single_summary(result, rubrics_cfg, apply_diagnostics)
+        # Note: Single conversation mode hiện tại chưa support multi-brand, chỉ dùng được với single mode
+        if args.brand_mode == "auto-by-botid":
+            print("⚠️  Single conversation mode with auto-by-botid is not fully supported yet. Using batch mode instead.")
+            # Fall through to batch mode
         else:
-            print(f"✗ Evaluation failed: {result['error']}")
-    
-    else:
-        # Batch evaluation - sử dụng high-speed evaluator cho 50 conv
-        try:
-            from busqa.batch_evaluator import evaluate_conversations_high_speed
+            start_time = datetime.now()
+            result = evaluate_conversation(
+                conversation_ids[0], args.base_url, args.brand_prompt_path,
+                rubrics_cfg, brand_prompt_text, brand_policy, llm_api_key,
+                args.llm_model, args.temperature, args.llm_base_url,
+                apply_diagnostics, diagnostics_cfg
+            )
+            elapsed = (datetime.now() - start_time).total_seconds()
             
-            def progress_callback(progress, current, total):
-                print(f"Progress: {current}/{total} ({progress:.1%})", end='\r', flush=True)
-            
-            results = asyncio.run(evaluate_conversations_high_speed(
-                conversation_ids, args.base_url, rubrics_cfg, brand_policy,
-                brand_prompt_text, llm_api_key, args.llm_model, args.temperature,
-                args.llm_base_url, apply_diagnostics, diagnostics_cfg,
-                args.max_concurrency, progress_callback
-            ))
-            
-            # Save batch results
+            # Save single result
             if args.output:
                 with open(args.output, 'w', encoding='utf-8') as f:
-                    json.dump(results, f, ensure_ascii=False, indent=2)
-                print(f"✓ Batch results saved to {args.output}")
+                    json.dump(result, f, ensure_ascii=False, indent=2)
+                print(f"✓ Result saved to {args.output} ({elapsed:.1f}s)")
             
-            # Clean up memory sau khi save
-            cleanup_memory()
-            
-            # Tạo summary nhanh
-            summary = make_summary(results)
-            insights = generate_insights(summary)
-            
-            summary_data = {
-                "summary": summary,
-                "insights": insights,
-                "generated_at": datetime.utcnow().isoformat() + "Z"
-            }
-            
-            summary_file = args.output.replace('.json', '_summary.json') if args.output else 'batch_summary.json'
-            with open(summary_file, 'w', encoding='utf-8') as f:
-                json.dump(summary_data, f, ensure_ascii=False, indent=2)
-            print(f"✓ Summary saved to {summary_file}")
-            
-            # Print batch summary
-            print_batch_summary(summary, insights)
-            
-        except Exception as e:
-            print(f"✗ Error running batch evaluation: {e}")
-            sys.exit(1)
+            if "error" not in result:
+                print_single_summary(result, rubrics_cfg, apply_diagnostics)
+            else:
+                print(f"✗ Evaluation failed: {result['error']}")
+            return  # Exit early cho single mode
+    
+    # Batch evaluation - sử dụng high-speed evaluator cho cả single và batch
+    try:
+        from busqa.batch_evaluator import evaluate_conversations_high_speed
+        
+        def progress_callback(progress, current, total):
+            print(f"Progress: {current}/{total} ({progress:.1%})", end='\r', flush=True)
+        
+        results = asyncio.run(evaluate_conversations_high_speed(
+            conversation_ids, args.base_url, rubrics_cfg, brand_policy,
+            brand_prompt_text, llm_api_key, args.llm_model, args.temperature,
+            args.llm_base_url, apply_diagnostics, diagnostics_cfg,
+            args.max_concurrency, progress_callback, brand_resolver
+        ))
+        
+        # Save batch results
+        if args.output:
+            with open(args.output, 'w', encoding='utf-8') as f:
+                json.dump(results, f, ensure_ascii=False, indent=2)
+            print(f"✓ Batch results saved to {args.output}")
+        
+        # Clean up memory sau khi save
+        cleanup_memory()
+        
+        # Tạo summary nhanh
+        summary = make_summary(results)
+        insights = generate_insights(summary)
+        
+        summary_data = {
+            "summary": summary,
+            "insights": insights,
+            "generated_at": datetime.utcnow().isoformat() + "Z"
+        }
+        
+        summary_file = args.output.replace('.json', '_summary.json') if args.output else 'batch_summary.json'
+        with open(summary_file, 'w', encoding='utf-8') as f:
+            json.dump(summary_data, f, ensure_ascii=False, indent=2)
+        print(f"✓ Summary saved to {summary_file}")
+        
+        # Print batch summary
+        print_batch_summary(summary, insights)
+        
+    except Exception as e:
+        print(f"✗ Error running batch evaluation: {e}")
+        sys.exit(1)
 
 def print_single_summary(result: Dict[str, Any], rubrics_cfg: dict, apply_diagnostics: bool):
     """Print summary for single conversation evaluation."""

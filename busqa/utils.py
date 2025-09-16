@@ -1,7 +1,7 @@
 import json
 import gc
 from typing import List, Dict, Any
-from functools import lru_cache
+
 
 def safe_parse_headers(raw: str) -> dict:
     raw = (raw or "").strip()
@@ -13,11 +13,7 @@ def safe_parse_headers(raw: str) -> dict:
     except Exception:
         return {}
 
-@lru_cache(maxsize=128)
-def cached_system_prompt(rubrics_version: str, brand_policy_hash: str, brand_text_hash: str) -> str:
-    """Cache system prompts để tránh rebuild nhiều lần"""
-    # Placeholder - sẽ được gọi từ prompting.py
-    return None
+
 
 def monitor_memory_usage() -> Dict[str, float]:
     """Monitor memory usage cho batch processing (simplified)"""

@@ -44,7 +44,7 @@ Bạn là QA Lead đánh giá chất lượng cuộc gọi khách hàng. Sử d�
 - Nếu vi phạm policy → hạ điểm policy_compliance và context_flow_closure
 - Trả về **JSON THUẦN** (không kèm văn bản khác)
 - Note phải kèm **bằng chứng + turn** cụ thể
-- Ngôn ngữ: tiếng Việt, súc tích, cụ thể
+- Ngôn ngữ: Tiếng Việt, súc tích, cụ thể
 """
 
 def get_unified_json_schema(rubrics_cfg: dict) -> dict:
@@ -104,6 +104,11 @@ QUY TẮC BẮT BUỘC:
     
     # trích xuất phần diagnostics để hiển thị gọn hơn
     diagnostics = metrics.get("diagnostics", {"operational_readiness": [], "risk_compliance": []})
+    
+    # Safety checks for None values
+    transcript = transcript or "No transcript available"
+    flow_types = flow_types or ["unknown"]
+    criteria_names = criteria_names or ["unknown"]
     
     return user_template.format(
         metrics_json=json.dumps({k: v for k, v in metrics.items() if k != "diagnostics"}, ensure_ascii=False, indent=2),

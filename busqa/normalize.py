@@ -62,7 +62,7 @@ def normalize_messages(raw: Any) -> List[Message]:
 def build_transcript(messages: List[Message], max_chars: int = 24000) -> str:
     lines = []
     for m in messages:
-        ts = m.ts.strftime("%Y-%m-%d %H:%M:%S") if m.ts else "-"
+        ts = m.ts.strftime("%Y-%m-%d %H:%M:%S") if m.ts is not None else "-"
         who = "USER" if m.sender_type == "user" else ("AGENT" if m.sender_type == "agent" else m.sender_type.upper())
         text = (m.text or "").replace("\n", " ").strip()
         lines.append(f"[{ts}] {who}: {text}")
