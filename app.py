@@ -20,7 +20,6 @@ from dotenv import load_dotenv
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).parent))
 
-from busqa.api_client import fetch_messages
 from busqa.normalize import normalize_messages, build_transcript
 from busqa.metrics import compute_latency_metrics, compute_additional_metrics, compute_policy_violations_count, filter_non_null_metrics
 from busqa.prompt_loader import load_unified_rubrics
@@ -31,8 +30,7 @@ from busqa.evaluator import coerce_llm_json_unified
 from busqa.utils import safe_parse_headers
 from busqa.aggregate import make_summary, generate_insights
 
-# Import evaluation functions from CLI
-from evaluate_cli import evaluate_conversation, evaluate_conversations_batch
+
 
 DEFAULT_BASE_URL = "http://103.141.140.243:14496"
 
@@ -345,8 +343,6 @@ def create_pdf_report(results, summary):
     result_count = len(results) if results else 0
     is_large_batch = result_count > 25
     
-    print(f"Creating PDF report for {result_count} results (large_batch: {is_large_batch})")
-    
     # Create PDF in memory
     buffer = BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=A4, leftMargin=0.7*inch, rightMargin=0.7*inch, topMargin=0.8*inch, bottomMargin=0.8*inch)
@@ -602,7 +598,7 @@ def create_pdf_report(results, summary):
             story.append(Spacer(1, 15))
             
         except Exception as e:
-            print(f"Warning: Could not add chart {chart_name_safe}: {e}")
+            pass  # Skip chart if generation fails
     
     story.append(PageBreak())
     
@@ -983,7 +979,6 @@ def create_charts_for_pdf(results, summary):
     
     # Skip chart generation completely if results are empty or more than 20 (to avoid timeout)
     if not results or len(results) > 20:
-        print(f"Skipping chart generation: {len(results) if results else 0} results")
         return charts
     
     try:
@@ -1048,7 +1043,6 @@ def create_charts_for_pdf(results, summary):
         return charts
         
     except Exception as e:
-        print(f"Chart generation failed: {e}")
         return []
 
 def create_html_report(results, summary):
@@ -1279,6 +1273,10 @@ with st.sidebar:
                                 
                                 # Store in session state for evaluation
                                 st.session_state.bulk_conversations = selected_conversations
+                                # Store bulk API info for optimization
+                                st.session_state.bulk_bot_id = bot_id
+                                st.session_state.bulk_bearer_token = bearer_token
+                                st.session_state.bulk_list_base_url = list_base_url
                                 
                                 # Show preview
                                 with st.expander("📋 Selected Conversations Preview"):
@@ -1333,6 +1331,10 @@ with st.sidebar:
             # Add button to clear bulk selection
             if st.button("🗑️ Clear Bulk Selection"):
                 del st.session_state.bulk_conversations
+                # Also clear bulk API info
+                for key in ['bulk_bot_id', 'bulk_bearer_token', 'bulk_list_base_url']:
+                    if hasattr(st.session_state, key):
+                        delattr(st.session_state, key)
                 st.rerun()
     
     # Dedupe and limit to 50
@@ -1533,34 +1535,31 @@ if eval_button and conversation_ids:
             ))
             
         else:
-            # Use regular high-speed batch evaluator (fetches from API)
+            # Use high-speed batch evaluator
             from busqa.batch_evaluator import evaluate_conversations_high_speed
             
+            status_text.text("Using high-speed batch evaluation...")
             results = asyncio.run(evaluate_conversations_high_speed(
-                conversation_ids=conversation_ids,
-                base_url=base_url,
-                rubrics_cfg=rubrics_cfg,
-                brand_policy=brand_policy if brand_mode == "single" else None,
-                brand_prompt_text=brand_prompt_text if brand_mode == "single" else None,
-                llm_api_key=llm_api_key,
-                llm_model=llm_model,
-                temperature=temperature,
-                llm_base_url=llm_base_url.strip() or None,
-                apply_diagnostics=apply_diagnostics,
-                diagnostics_cfg=diagnostics_cfg,
-                max_concurrency=max_concurrency,
-                progress_callback=progress_callback,
-                brand_resolver=brand_resolver if brand_mode == "auto-by-botid" else None
-            ))
+                    conversation_ids=conversation_ids,
+                    base_url=base_url,
+                    rubrics_cfg=rubrics_cfg,
+                    brand_policy=brand_policy if brand_mode == "single" else None,
+                    brand_prompt_text=brand_prompt_text if brand_mode == "single" else None,
+                    llm_api_key=llm_api_key,
+                    llm_model=llm_model,
+                    temperature=temperature,
+                    llm_base_url=llm_base_url.strip() or None,
+                    apply_diagnostics=apply_diagnostics,
+                    diagnostics_cfg=diagnostics_cfg,
+                    max_concurrency=max_concurrency,
+                    progress_callback=progress_callback,
+                    brand_resolver=brand_resolver if brand_mode == "auto-by-botid" else None
+                ))
         
         progress_bar.progress(1.0)
         status_text.text("✅ Batch evaluation completed!")
         
-        # Debug: Check results structure
-        st.write(f"Debug: Got {len(results)} results")
-        success_count = len([r for r in results if "error" not in r])
-        error_count = len([r for r in results if "error" in r])
-        st.write(f"Debug: {success_count} successful, {error_count} errors")
+
         
         # Generate summary
         summary = make_summary(results)

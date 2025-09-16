@@ -17,169 +17,16 @@ from typing import List, Dict, Any
 project_root = Path(__file__).parent
 sys.path.insert(0, str(project_root))
 
-from busqa.api_client import fetch_messages
-from busqa.normalize import normalize_messages, build_transcript
-from busqa.metrics import compute_latency_metrics, compute_additional_metrics, compute_policy_violations_count, filter_non_null_metrics
 from busqa.prompt_loader import load_unified_rubrics
 from busqa.brand_specs import load_brand_prompt
-from busqa.prompting import build_system_prompt_unified, build_user_instruction
-from busqa.llm_client import call_llm
-from busqa.evaluator import coerce_llm_json_unified
 from busqa.aggregate import make_summary, generate_insights
-from busqa.utils import cleanup_memory, chunk_conversations, estimate_batch_time
+from busqa.utils import cleanup_memory, estimate_batch_time
 
 # Setup logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-def evaluate_conversation(
-    conversation_id: str,
-    base_url: str,
-    brand_prompt_path: str,
-    rubrics_cfg: dict,
-    brand_prompt_text: str,
-    brand_policy,
-    llm_api_key: str,
-    llm_model: str,
-    temperature: float,
-    llm_base_url: str = None,
-    apply_diagnostics: bool = True,
-    diagnostics_cfg: dict = None
-) -> Dict[str, Any]:
-    """Chấm điểm 1 conversation, tối ưu cho batch processing"""
-    try:
-        # Fetch + normalize nhanh
-        raw_data = fetch_messages(base_url, conversation_id)
-        messages = normalize_messages(raw_data)
-        
-        if not messages:
-            raise ValueError("No messages found")
-        
-        # Compute metrics song song
-        transcript = build_transcript(messages)
-        metrics = compute_latency_metrics(messages)
-        additional_metrics = compute_additional_metrics(messages)
-        policy_violations_count = compute_policy_violations_count(messages, brand_policy)
-        
-        additional_metrics["policy_violations"] = policy_violations_count
-        metrics.update(additional_metrics)
-        metrics_for_llm = filter_non_null_metrics(metrics)
-        
-        # Build prompts (cached được nếu cần)
-        system_prompt = build_system_prompt_unified(rubrics_cfg, brand_policy, brand_prompt_text)
-        user_prompt = build_user_instruction(metrics_for_llm, transcript, rubrics_cfg)
-        
-        # Call LLM
-        llm_response = call_llm(
-            api_key=llm_api_key,
-            model=llm_model,
-            system_prompt=system_prompt,
-            user_prompt=user_prompt,
-            base_url=llm_base_url,
-            temperature=temperature
-        )
-        
-        # Process kết quả
-        diagnostics_hits = metrics.get("diagnostics", {}) if apply_diagnostics else {}
-        
-        result = coerce_llm_json_unified(
-            llm_response,
-            rubrics_cfg=rubrics_cfg,
-            brand_policy=brand_policy,
-            messages=messages,
-            transcript=transcript,
-            metrics=metrics,
-            diagnostics_cfg=diagnostics_cfg if apply_diagnostics else None,
-            diagnostics_hits=diagnostics_hits
-        )
-        
-        # Extract brand_id from brand_prompt_path
-        brand_id = "unknown"
-        if brand_prompt_path:
-            import os
-            brand_parts = brand_prompt_path.split(os.sep)
-            if "brands" in brand_parts:
-                try:
-                    brand_idx = brand_parts.index("brands")
-                    if brand_idx + 1 < len(brand_parts):
-                        brand_id = brand_parts[brand_idx + 1]
-                except:
-                    pass
-        
-        return {
-            "conversation_id": conversation_id,
-            "brand_id": brand_id,
-            "brand_prompt_path": brand_prompt_path,
-            "rubric_version": rubrics_cfg["version"],
-            "evaluation_timestamp": datetime.utcnow().isoformat() + "Z",
-            "result": result.model_dump(),
-            "metrics": metrics,
-            "transcript_preview": transcript[:500] + "..." if len(transcript) > 500 else transcript  # Giảm preview
-        }
-        
-    except Exception as e:
-        logger.error(f"Error evaluating {conversation_id}: {e}")
-        return {
-            "conversation_id": conversation_id,
-            "error": str(e),
-            "evaluation_timestamp": datetime.utcnow().isoformat() + "Z"
-        }
 
-async def evaluate_conversations_batch(
-    conversation_ids: List[str],
-    base_url: str,
-    brand_prompt_path: str,
-    rubrics_cfg: dict,
-    brand_prompt_text: str,
-    brand_policy,
-    llm_api_key: str,
-    llm_model: str,
-    temperature: float,
-    llm_base_url: str = None,
-    apply_diagnostics: bool = True,
-    diagnostics_cfg: dict = None,
-    max_concurrency: int = 15
-) -> List[Dict[str, Any]]:
-    """Chấm điểm nhiều conversations song song, tối ưu cho 50 conv"""
-    
-    # Tăng semaphore cho 50 conv
-    semaphore = asyncio.Semaphore(max_concurrency)
-    
-    async def evaluate_with_semaphore(conv_id: str):
-        async with semaphore:
-            return await asyncio.to_thread(
-                evaluate_conversation,
-                conv_id, base_url, brand_prompt_path, rubrics_cfg,
-                brand_prompt_text, brand_policy, llm_api_key, llm_model,
-                temperature, llm_base_url, apply_diagnostics, diagnostics_cfg
-            )
-    
-    # Tạo tasks cho tất cả conversations
-    print(f"🔥 Starting batch evaluation: {len(conversation_ids)} conversations, concurrency={max_concurrency}")
-    tasks = [evaluate_with_semaphore(conv_id) for conv_id in conversation_ids]
-    
-    # Chạy tất cả cùng lúc với progress tracking
-    start_time = datetime.now()
-    results = await asyncio.gather(*tasks, return_exceptions=True)
-    elapsed = (datetime.now() - start_time).total_seconds()
-    
-    # Process exceptions thành error dicts
-    processed_results = []
-    success_count = 0
-    
-    for i, result in enumerate(results):
-        if isinstance(result, Exception):
-            processed_results.append({
-                "conversation_id": conversation_ids[i],
-                "error": str(result),
-                "evaluation_timestamp": datetime.utcnow().isoformat() + "Z"
-            })
-        else:
-            processed_results.append(result)
-            success_count += 1
-    
-    print(f"✅ Batch completed: {success_count}/{len(conversation_ids)} success in {elapsed:.1f}s")
-    return processed_results
 
 def parse_conversation_ids(args) -> List[str]:
     """Parse conversation IDs from command line arguments."""
@@ -355,33 +202,7 @@ def main():
     
     print(f"\n🚀 Starting evaluation with concurrency={args.max_concurrency}...")
     
-    if len(conversation_ids) == 1:
-        # Single conversation - backward compatibility
-        # Note: Single conversation mode hiện tại chưa support multi-brand, chỉ dùng được với single mode
-        if args.brand_mode == "auto-by-botid":
-            print("⚠️  Single conversation mode with auto-by-botid is not fully supported yet. Using batch mode instead.")
-            # Fall through to batch mode
-        else:
-            start_time = datetime.now()
-            result = evaluate_conversation(
-                conversation_ids[0], args.base_url, args.brand_prompt_path,
-                rubrics_cfg, brand_prompt_text, brand_policy, llm_api_key,
-                args.llm_model, args.temperature, args.llm_base_url,
-                apply_diagnostics, diagnostics_cfg
-            )
-            elapsed = (datetime.now() - start_time).total_seconds()
-            
-            # Save single result
-            if args.output:
-                with open(args.output, 'w', encoding='utf-8') as f:
-                    json.dump(result, f, ensure_ascii=False, indent=2)
-                print(f"✓ Result saved to {args.output} ({elapsed:.1f}s)")
-            
-            if "error" not in result:
-                print_single_summary(result, rubrics_cfg, apply_diagnostics)
-            else:
-                print(f"✗ Evaluation failed: {result['error']}")
-            return  # Exit early cho single mode
+
     
     # Batch evaluation - sử dụng high-speed evaluator cho cả single và batch
     try:

@@ -3,7 +3,7 @@ import time
 from typing import List, Dict, Any, Optional
 from datetime import datetime
 from dataclasses import dataclass
-from concurrent.futures import ThreadPoolExecutor, as_completed
+
 import logging
 
 from .api_client import fetch_messages
@@ -19,6 +19,8 @@ from .parsers import extract_bot_id
 from .brand_resolver import BrandResolver
 
 logger = logging.getLogger(__name__)
+
+
 
 @dataclass
 class BatchConfig:
@@ -353,3 +355,5 @@ async def evaluate_conversations_high_speed(
         brand_prompt_text, llm_api_key, llm_model, temperature,
         llm_base_url, apply_diagnostics, diagnostics_cfg, brand_resolver
     )
+
+
