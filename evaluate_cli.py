@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 CLI script for evaluating conversations using Unified Rubric System
-Supports batch evaluation up to 50 conversations with high performance
+Supports batch evaluation with high performance
 """
 import argparse
 import json
@@ -58,10 +58,9 @@ def parse_conversation_ids(args) -> List[str]:
             seen.add(id)
             unique_ids.append(id)
     
-    # Cap at 50 conversations
-    if len(unique_ids) > 50:
-        logger.warning(f"Too many conversation IDs ({len(unique_ids)}). Limiting to first 50.")
-        unique_ids = unique_ids[:50]
+    # Show warning for very large batches
+    if len(unique_ids) > 100:
+        logger.warning(f"Large batch detected: {len(unique_ids)} conversations. This may take significant time and resources.")
     
     return unique_ids
 

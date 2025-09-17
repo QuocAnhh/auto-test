@@ -2,6 +2,40 @@
 
 Hệ thống đánh giá chất lượng hội thoại chatbot/tổng đài tự động sử dụng LLM (Large Language Model) cho ngành vận tải hành khách.
 
+**🚀 Giao diện hiện đại**: Đã chuyển từ Streamlit sang Flask web app với HTML/CSS/JS hiện đại, responsive, và user-friendly.
+
+## 🚀 Cách chạy ứng dụng
+
+### Sử dụng Docker (Khuyến nghị)
+
+```bash
+# Chạy ở chế độ development
+./docker_run.sh dev
+
+# Chạy ở chế độ production (với Redis cache)
+./docker_run.sh prod
+
+# Dừng ứng dụng
+./docker_stop.sh
+
+# Dừng và dọn dẹp Docker resources
+./docker_stop.sh clean
+```
+
+Ứng dụng sẽ chạy tại: **http://localhost:5000**
+
+### Chạy trực tiếp (không Docker)
+
+```bash
+# Cài đặt dependencies
+pip install -r requirements.txt
+
+# Chạy Flask app
+python run_webapp.py
+# hoặc
+./run_webapp.sh
+```
+
 ## Tổng quan
 
 Dự án này cung cấp một hệ thống hoàn chỉnh để:
@@ -9,6 +43,7 @@ Dự án này cung cấp một hệ thống hoàn chỉnh để:
 - Phân tích và đánh giá chất lượng hội thoại theo 8 tiêu chí thống nhất
 - Phát hiện vi phạm chính sách và vấn đề vận hành
 - Tạo báo cáo chi tiết với insights và metrics
+- **Giao diện web hiện đại** với real-time streaming, export CSV/JSON, benchmark tools
 
 ## Kiến trúc hệ thống
 

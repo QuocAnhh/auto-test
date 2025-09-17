@@ -1,0 +1,577 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>🚌 Bus QA LLM Evaluator - High-Performance Batch Evaluation</title>
+    
+    <!-- Bootstrap CSS -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    
+    <!-- Font Awesome -->
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+    
+    <!-- Chart.js -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    
+    <!-- Custom CSS -->
+    <link href="{{ url_for('static', filename='styles.css') }}" rel="stylesheet">
+</head>
+<body>
+    <!-- Navigation -->
+    <nav class="navbar navbar-expand-lg navbar-dark bg-primary">
+        <div class="container-fluid">
+            <a class="navbar-brand" href="#">🚌 Bus QA LLM Evaluator</a>
+            <span class="navbar-text">
+                High-Performance Batch Evaluation System
+            </span>
+        </div>
+    </nav>
+
+    <div class="container-fluid mt-4">
+        <div class="row">
+            <!-- Sidebar -->
+            <div class="col-md-3">
+                <div class="card">
+                    <div class="card-header">
+                        <h5><i class="fas fa-cog"></i> Configuration</h5>
+                    </div>
+                    <div class="card-body">
+                        <!-- API Configuration -->
+                        <div class="mb-4">
+                            <h6 class="text-primary">API Configuration</h6>
+                            <div class="mb-3">
+                                <label class="form-label">BASE_URL</label>
+                                <input type="text" class="form-control" id="baseUrl" placeholder="API Base URL">
+                            </div>
+                            <div class="mb-3">
+                                <label class="form-label">Headers (JSON, optional)</label>
+                                <textarea class="form-control" id="headers" rows="3" placeholder='{"Authorization":"Bearer xxx"}'></textarea>
+                            </div>
+                        </div>
+
+                        <!-- Performance Tools -->
+                        <div class="mb-4">
+                            <h6 class="text-success"><i class="fas fa-rocket"></i> Performance Tools</h6>
+                            <button class="btn btn-outline-warning btn-sm" id="benchmarkBtn">
+                                <i class="fas fa-bolt"></i> Run Benchmark Test
+                            </button>
+                            <small class="form-text text-muted mt-2">
+                                Benchmark tool để tìm optimal concurrency cho system của bạn.
+                            </small>
+                        </div>
+
+                        <!-- Evaluation Mode Selection -->
+                        <div class="mb-4">
+                            <h6 class="text-info">Evaluation Mode</h6>
+                            <div class="btn-group w-100" role="group">
+                                <input type="radio" class="btn-check" name="evaluationMode" id="singleEvalMode" value="single">
+                                <label class="btn btn-outline-primary btn-sm" for="singleEvalMode">Single Conversation</label>
+                                
+                                <input type="radio" class="btn-check" name="evaluationMode" id="batchEvalMode" value="batch" checked>
+                                <label class="btn btn-outline-primary btn-sm" for="batchEvalMode">Batch Evaluation</label>
+                            </div>
+                        </div>
+
+                        <!-- Single Conversation Input -->
+                        <div id="singleConversationInput" style="display: none;">
+                            <div class="mb-3">
+                                <label class="form-label">Conversation ID</label>
+                                <input type="text" class="form-control" id="singleConversationId" 
+                                    placeholder="Enter conversation ID (e.g., conv_123)">
+                            </div>
+                            <button class="btn btn-success btn-sm w-100" id="evaluateSingleBtn">
+                                <i class="fas fa-play"></i> Evaluate Single Conversation
+                            </button>
+                        </div>
+
+                        <!-- Batch Conversation IDs Input -->
+                        <div id="batchConversationInput">
+                            <h6 class="text-info">Conversation IDs (Batch)</h6>
+                            
+                            <!-- Input Method Selection -->
+                            <div class="mb-3">
+                                <label class="form-label">Input method:</label>
+                                <div class="btn-group w-100" role="group">
+                                    <input type="radio" class="btn-check" name="inputMethod" id="textAreaMethod" value="textarea" checked>
+                                    <label class="btn btn-outline-secondary btn-sm" for="textAreaMethod">Text Area</label>
+                                    
+                                    <input type="radio" class="btn-check" name="inputMethod" id="fileUploadMethod" value="file">
+                                    <label class="btn btn-outline-secondary btn-sm" for="fileUploadMethod">File Upload</label>
+                                    
+                                    <input type="radio" class="btn-check" name="inputMethod" id="bulkListMethod" value="bulk">
+                                    <label class="btn btn-outline-secondary btn-sm" for="bulkListMethod">Bulk List</label>
+                                </div>
+                            </div>
+
+                            <!-- Text Area Input -->
+                            <div id="textAreaInput">
+                                <textarea class="form-control" id="conversationIds" rows="6" 
+                                    placeholder="conv_123&#10;conv_456&#10;conv_789"></textarea>
+                            </div>
+
+                            <!-- File Upload Input -->
+                            <div id="fileUploadInput" style="display: none;">
+                                <input type="file" class="form-control" id="fileInput" accept=".txt,.csv">
+                                <small class="form-text text-muted">
+                                    Upload .txt (one ID per line) or .csv file with IDs in first column
+                                </small>
+                            </div>
+
+                            <!-- Bulk List Input -->
+                            <div id="bulkListInput" style="display: none;">
+                                <div class="row mb-2">
+                                    <div class="col-6">
+                                        <label class="form-label">List API Base URL</label>
+                                        <input type="text" class="form-control form-control-sm" id="listBaseUrl" 
+                                            value="https://live-demo.agenticai.pro.vn">
+                                    </div>
+                                    <div class="col-6">
+                                        <label class="form-label">Bot ID</label>
+                                        <input type="text" class="form-control form-control-sm" id="botId" 
+                                            placeholder="Enter bot ID">
+                                    </div>
+                                </div>
+                                <div class="row mb-2">
+                                    <div class="col-6">
+                                        <label class="form-label">Bearer Token</label>
+                                        <input type="password" class="form-control form-control-sm" id="bearerToken" 
+                                            placeholder="Bearer token">
+                                    </div>
+                                    <div class="col-6">
+                                        <label class="form-label">Page Size</label>
+                                        <input type="number" class="form-control form-control-sm" id="pageSize" 
+                                            value="30" min="10" max="500">
+                                    </div>
+                                </div>
+                                <div class="row mb-2">
+                                    <div class="col-4">
+                                        <label class="form-label">Max Pages</label>
+                                        <input type="number" class="form-control form-control-sm" id="maxPages" 
+                                            value="5" min="1" max="100">
+                                    </div>
+                                    <div class="col-4">
+                                        <label class="form-label">Take</label>
+                                        <input type="number" class="form-control form-control-sm" id="take" 
+                                            value="10" min="1" max="500">
+                                    </div>
+                                    <div class="col-4">
+                                        <label class="form-label">Skip</label>
+                                        <input type="number" class="form-control form-control-sm" id="skip" 
+                                            value="0" min="0" max="1000">
+                                    </div>
+                                </div>
+                                <div class="row mb-3">
+                                    <div class="col-6">
+                                        <label class="form-label">Strategy</label>
+                                        <select class="form-select form-select-sm" id="strategy">
+                                            <option value="head">Head</option>
+                                            <option value="tail">Tail</option>
+                                            <option value="random">Random</option>
+                                            <option value="newest" selected>Newest</option>
+                                            <option value="oldest">Oldest</option>
+                                        </select>
+                                    </div>
+                                    <div class="col-6">
+                                        <label class="form-label">Min Turns</label>
+                                        <input type="number" class="form-control form-control-sm" id="minTurns" 
+                                            value="0" min="0" max="20">
+                                    </div>
+                                </div>
+                                <div class="d-grid gap-2">
+                                    <button class="btn btn-outline-info btn-sm" id="testTokenBtn">
+                                        <i class="fas fa-vial"></i> Test Bearer Token
+                                    </button>
+                                    <button class="btn btn-primary btn-sm" id="fetchConversationsBtn">
+                                        <i class="fas fa-search"></i> Fetch & Select Conversations
+                                    </button>
+                                </div>
+                            </div>
+
+                            <!-- Conversation IDs Preview -->
+                            <div id="conversationPreview" class="mt-3" style="display: none;">
+                                <div class="alert alert-success" role="alert">
+                                    <i class="fas fa-check-circle"></i> Ready to evaluate <span id="conversationCount">0</span> conversation(s)
+                                </div>
+                                <button class="btn btn-outline-secondary btn-sm" type="button" data-bs-toggle="collapse" 
+                                    data-bs-target="#idsList" aria-expanded="false">
+                                    <i class="fas fa-eye"></i> Preview IDs
+                                </button>
+                                <div class="collapse mt-2" id="idsList">
+                                    <div class="card card-body" style="max-height: 200px; overflow-y: auto;">
+                                        <ul id="idsPreview" class="list-unstyled mb-0" style="font-size: 0.8em;">
+                                        </ul>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Brand Configuration -->
+                        <div class="mb-4">
+                            <h6 class="text-warning">Brand Configuration</h6>
+                            
+                            <div class="mb-3">
+                                <label class="form-label">Brand Mode:</label>
+                                <div class="form-check">
+                                    <input class="form-check-input" type="radio" name="brandMode" id="singleMode" value="single" checked>
+                                    <label class="form-check-label" for="singleMode">Single</label>
+                                </div>
+                                <div class="form-check">
+                                    <input class="form-check-input" type="radio" name="brandMode" id="autoMode" value="auto-by-botid">
+                                    <label class="form-check-label" for="autoMode">Auto by Bot ID</label>
+                                </div>
+                            </div>
+
+                            <!-- Single Brand Mode -->
+                            <div id="singleBrandConfig">
+                                <div class="mb-3">
+                                    <label class="form-label">Choose brand</label>
+                                    <select class="form-select" id="selectedBrand">
+                                        <option value="son_hai">Son Hai</option>
+                                        <option value="long_van">Long Van</option>
+                                    </select>
+                                </div>
+                                <div id="brandPolicyInfo" class="small text-muted">
+                                    <!-- Brand policy will be loaded here -->
+                                </div>
+                            </div>
+
+                            <!-- Auto Brand Mode -->
+                            <div id="autoBrandConfig" style="display: none;">
+                                <div class="mb-3">
+                                    <label class="form-label">Bot Map Path</label>
+                                    <input type="text" class="form-control" id="botMapPath" value="config/bot_map.yaml">
+                                </div>
+                                <button class="btn btn-outline-warning btn-sm" id="loadBotMapBtn">Load Bot Map</button>
+                                <div id="botMapInfo" class="mt-2 small text-muted">
+                                    <!-- Bot map info will be loaded here -->
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Diagnostics Configuration -->
+                        <div class="mb-4">
+                            <h6 class="text-danger">Diagnostics Configuration</h6>
+                            <div class="form-check">
+                                <input class="form-check-input" type="checkbox" id="applyDiagnostics" checked>
+                                <label class="form-check-label" for="applyDiagnostics">
+                                    Apply diagnostic penalties
+                                </label>
+                            </div>
+                            <div id="diagnosticsInfo" class="small text-muted mt-2">
+                                <!-- Diagnostics info will be loaded here -->
+                            </div>
+                        </div>
+
+                        <!-- Performance Configuration -->
+                        <div class="mb-4">
+                            <h6 class="text-success"><i class="fas fa-bolt"></i> Performance Configuration</h6>
+                            
+                            <div class="row mb-2">
+                                <div class="col-12">
+                                    <label class="form-label">Max Concurrency: <span id="concurrencyValue">30</span></label>
+                                    <input type="range" class="form-range" id="maxConcurrency" min="10" max="50" value="30" step="5">
+                                </div>
+                            </div>
+
+                            <div class="row mb-2">
+                                <div class="col-12">
+                                    <label class="form-label">API Rate Limit: <span id="rateLimitValue">200</span> req/s</label>
+                                    <input type="range" class="form-range" id="apiRateLimit" min="100" max="500" value="200" step="25">
+                                </div>
+                            </div>
+
+                            <div class="form-check mb-2">
+                                <input class="form-check-input" type="checkbox" id="progressiveBatching" checked>
+                                <label class="form-check-label" for="progressiveBatching">
+                                    🔄 Progressive Batching
+                                </label>
+                            </div>
+
+                            <div class="form-check mb-2">
+                                <input class="form-check-input" type="checkbox" id="highPerformanceApi" checked>
+                                <label class="form-check-label" for="highPerformanceApi">
+                                    🚀 High-Performance API
+                                </label>
+                            </div>
+
+                            <div class="form-check mb-2">
+                                <input class="form-check-input" type="checkbox" id="enableCaching">
+                                <label class="form-check-label" for="enableCaching">
+                                    📦 Redis Caching
+                                </label>
+                            </div>
+
+                            <div class="form-check mb-2">
+                                <input class="form-check-input" type="checkbox" id="showMetrics" checked>
+                                <label class="form-check-label" for="showMetrics">
+                                    📊 Show Performance Metrics
+                                </label>
+                            </div>
+                        </div>
+
+                        <!-- LLM Configuration -->
+                        <div class="mb-4">
+                            <h6 class="text-info"><i class="fas fa-robot"></i> LLM Configuration</h6>
+                            <small class="text-muted">Model: gemini-2.5-flash | API key từ file .env</small>
+                            
+                            <div class="mb-3">
+                                <label class="form-label">LLM Base URL (optional)</label>
+                                <input type="text" class="form-control" id="llmBaseUrl" placeholder="Leave empty for OpenAI default">
+                            </div>
+                            
+                            <div class="mb-3">
+                                <label class="form-label">Temperature: <span id="temperatureValue">0.2</span></label>
+                                <input type="range" class="form-range" id="temperature" min="0" max="1" value="0.2" step="0.1">
+                            </div>
+                            
+                            <div class="mb-3">
+                                <label class="form-label">Max Characters</label>
+                                <input type="number" class="form-control" id="maxChars" value="24000" min="2000" max="200000" step="1000">
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Main Content -->
+            <div class="col-md-9">
+                <!-- Benchmark Modal -->
+                <div class="modal fade" id="benchmarkModal" tabindex="-1">
+                    <div class="modal-dialog modal-lg">
+                        <div class="modal-content">
+                            <div class="modal-header">
+                                <h5 class="modal-title"><i class="fas fa-bolt"></i> Performance Benchmark Tool</h5>
+                                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                            </div>
+                            <div class="modal-body">
+                                <div class="alert alert-info">
+                                    <i class="fas fa-bullseye"></i> <strong>Benchmark Tool</strong>: Tự động test các mức concurrency khác nhau để tìm optimal performance cho system.
+                                </div>
+                                
+                                <div class="row">
+                                    <div class="col-md-6">
+                                        <div class="mb-3">
+                                            <label class="form-label">Test Conversations</label>
+                                            <input type="number" class="form-control" id="benchmarkConversations" value="5" min="3" max="20">
+                                        </div>
+                                        <div class="mb-3">
+                                            <label class="form-label">Iterations</label>
+                                            <input type="number" class="form-control" id="benchmarkIterations" value="1" min="1" max="5">
+                                        </div>
+                                    </div>
+                                    <div class="col-md-6">
+                                        <div class="mb-3">
+                                            <label class="form-label">Concurrency Levels (comma-separated)</label>
+                                            <input type="text" class="form-control" id="benchmarkConcurrency" value="10,20,30">
+                                        </div>
+                                    </div>
+                                </div>
+                                
+                                <div id="benchmarkResults" style="display: none;">
+                                    <h6>Benchmark Results:</h6>
+                                    <div id="benchmarkChart">
+                                        <canvas id="benchmarkChartCanvas" width="400" height="200"></canvas>
+                                    </div>
+                                    <div id="benchmarkRecommendation" class="alert alert-success mt-3">
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="modal-footer">
+                                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+                                <button type="button" class="btn btn-warning" id="runBenchmarkBtn">
+                                    <i class="fas fa-play"></i> Run Benchmark
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Main Evaluation Section -->
+                <div class="card">
+                    <div class="card-header d-flex justify-content-between align-items-center">
+                        <h5><i class="fas fa-rocket"></i> Batch Evaluation</h5>
+                        <div>
+                            <span class="badge bg-info" id="lastBatchInfo" style="display: none;"></span>
+                        </div>
+                    </div>
+                    <div class="card-body">
+                        <!-- Evaluation Controls -->
+                        <div class="row mb-3">
+                            <div class="col-md-8">
+                                <button class="btn btn-primary btn-lg" id="evaluateBtn" disabled>
+                                    <i class="fas fa-rocket"></i> Chấm điểm batch (single-brand)
+                                </button>
+                            </div>
+                            <div class="col-md-4 text-end">
+                                <div id="flowsInfo" class="small text-muted">
+                                    <!-- Available flows will be shown here -->
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Progress Section -->
+                        <div id="progressSection" style="display: none;">
+                            <div class="mb-3">
+                                <div class="d-flex justify-content-between">
+                                    <small id="progressText">Starting evaluation...</small>
+                                    <small id="progressPercent">0%</small>
+                                </div>
+                                <div class="progress">
+                                    <div class="progress-bar progress-bar-striped progress-bar-animated" 
+                                        id="progressBar" role="progressbar" style="width: 0%"></div>
+                                </div>
+                            </div>
+                            
+                            <!-- Real-time Metrics -->
+                            <div class="row" id="metricsSection">
+                                <div class="col-md-3">
+                                    <div class="card text-center">
+                                        <div class="card-body p-2">
+                                            <h6 class="card-title mb-1">Processed</h6>
+                                            <h4 class="text-primary mb-0" id="processedCount">0</h4>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="col-md-3">
+                                    <div class="card text-center">
+                                        <div class="card-body p-2">
+                                            <h6 class="card-title mb-1">Success Rate</h6>
+                                            <h4 class="text-success mb-0" id="successRate">0%</h4>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="col-md-3">
+                                    <div class="card text-center">
+                                        <div class="card-body p-2">
+                                            <h6 class="card-title mb-1">Avg Score</h6>
+                                            <h4 class="text-info mb-0" id="avgScore">0</h4>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="col-md-3">
+                                    <div class="card text-center">
+                                        <div class="card-body p-2">
+                                            <h6 class="card-title mb-1">Est. Time</h6>
+                                            <h4 class="text-warning mb-0" id="estimatedTime">--</h4>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Results Section -->
+                        <div id="resultsSection" style="display: none;">
+                            <h5><i class="fas fa-chart-bar"></i> Evaluation Results</h5>
+                            
+                            <!-- Summary Cards -->
+                            <div class="row mb-4" id="summaryCards">
+                                <!-- Summary cards will be populated here -->
+                            </div>
+
+                            <!-- Export Options -->
+                            <div class="mb-3">
+                                <h6>Export Results:</h6>
+                                <div class="btn-group" role="group">
+                                    <button class="btn btn-outline-danger" id="exportPdfBtn">
+                                        <i class="fas fa-file-pdf"></i> PDF Report
+                                    </button>
+                                    <button class="btn btn-outline-success" id="exportExcelBtn">
+                                        <i class="fas fa-file-excel"></i> Excel
+                                    </button>
+                                    <button class="btn btn-outline-info" id="exportJsonBtn">
+                                        <i class="fas fa-file-code"></i> JSON
+                                    </button>
+                                </div>
+                                <button class="btn btn-outline-secondary ms-2" id="clearResultsBtn">
+                                    <i class="fas fa-trash"></i> Clear Results
+                                </button>
+                            </div>
+
+                            <!-- Results Table -->
+                            <div class="table-responsive">
+                                <table class="table table-hover" id="resultsTable">
+                                    <thead class="table-dark">
+                                        <tr>
+                                            <th>Conversation ID</th>
+                                            <th>Brand</th>
+                                            <th>Flow</th>
+                                            <th>Score</th>
+                                            <th>Label</th>
+                                            <th>Confidence</th>
+                                            <th>Processing Time</th>
+                                            <th>Status</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="resultsTableBody">
+                                        <!-- Results will be populated here -->
+                                    </tbody>
+                                </table>
+                            </div>
+
+                            <!-- Charts Section -->
+                            <div class="row mt-4">
+                                <div class="col-md-6">
+                                    <div class="card">
+                                        <div class="card-header">
+                                            <h6><i class="fas fa-chart-pie"></i> Score Distribution</h6>
+                                        </div>
+                                        <div class="card-body">
+                                            <canvas id="scoreChart" width="400" height="300"></canvas>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="col-md-6">
+                                    <div class="card">
+                                        <div class="card-header">
+                                            <h6><i class="fas fa-chart-bar"></i> Flow Distribution</h6>
+                                        </div>
+                                        <div class="card-body">
+                                            <canvas id="flowChart" width="400" height="300"></canvas>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Live Streaming Results -->
+                        <div id="streamingSection" style="display: none;">
+                            <h5><i class="fas fa-stream"></i> Live Results Stream</h5>
+                            <div id="streamingResults" class="bg-light p-3" style="max-height: 400px; overflow-y: auto;">
+                                <!-- Streaming results will appear here -->
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Toast Container -->
+    <div class="toast-container position-fixed bottom-0 end-0 p-3">
+        <div id="toast" class="toast" role="alert">
+            <div class="toast-header">
+                <strong class="me-auto" id="toastTitle">Notification</strong>
+                <button type="button" class="btn-close" data-bs-dismiss="toast"></button>
+            </div>
+            <div class="toast-body" id="toastBody">
+                <!-- Toast message -->
+            </div>
+        </div>
+    </div>
+
+    <!-- Loading Spinner -->
+    <div id="loadingSpinner" class="position-fixed top-50 start-50 translate-middle" style="display: none;">
+        <div class="spinner-border text-primary" role="status">
+            <span class="visually-hidden">Loading...</span>
+        </div>
+    </div>
+
+    <!-- Bootstrap JS -->
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    
+    <!-- Custom JS -->
+    <script src="{{ url_for('static', filename='app.js') }}"></script>
+    
+</body>
+</html>

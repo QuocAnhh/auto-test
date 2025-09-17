@@ -1,0 +1,66 @@
+# Production-optimized configuration cho high-throughput processing
+
+version: '3.8'
+services:
+  busqa:
+    build: .
+    ports:
+      - "5000:5000"
+    env_file:
+      - .env
+    restart: unless-stopped
+    # Performance optimizations
+    environment:
+      - PYTHONUNBUFFERED=1
+      # Optimize Python for high concurrency
+      - PYTHONASYNCIODEBUG=0
+      # Memory optimizations
+      - MALLOC_ARENA_MAX=4  # Tăng cho high concurrency
+      # Async optimization
+      - PYTHONHASHSEED=0
+      # Redis connection for caching
+      - REDIS_URL=redis://redis:6379/0
+    # Resource limits cho container - optimized cho high-throughput
+    deploy:
+      resources:
+        limits:
+          cpus: '8.0'  # Tăng CPU cho high concurrency
+          memory: 16G  # Tăng RAM cho large batches
+        reservations:
+          cpus: '4.0'  # Tăng reserved CPU
+          memory: 8G   # Tăng reserved memory
+    # Health check
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/api/config"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    # Shared memory cho high concurrency
+    shm_size: 2g  # Tăng shared memory
+    # Network optimization
+    sysctls:
+      - net.core.somaxconn=65535
+      - net.ipv4.tcp_max_syn_backlog=65535
+    
+  # Redis cho caching và performance optimization
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    command: redis-server --maxmemory 2gb --maxmemory-policy allkeys-lru --tcp-backlog 65535 --save ""
+    volumes:
+      - redis_data:/data
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 3G
+        reservations:
+          cpus: '1.0'
+          memory: 1G
+    sysctls:
+      - net.core.somaxconn=65535
+    
+volumes:
+  redis_data:

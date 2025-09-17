@@ -3,18 +3,12 @@ services:
   busqa:
     build: .
     ports:
-      - "8501:8501"
+      - "5000:5000"
     env_file:
       - .env
     restart: unless-stopped
-  
-  # Service for running bulk evaluation
-  bulk-evaluator:
-    build: .
-    env_file:
-      - .env
     volumes:
-      - ./results:/app/results  # Mount for output files
-    profiles:
-      - tools
-    command: ["python", "tools/bulk_list_evaluate.py", "--help"] 
+      - ./results:/app/results
+    environment:
+      - FLASK_ENV=development
+      - FLASK_DEBUG=true 
