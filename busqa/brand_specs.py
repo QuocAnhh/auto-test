@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 from typing import Dict, Any, Tuple
 import yaml
+import os
 
 @dataclass
 class BrandPolicy:
@@ -42,5 +43,25 @@ def load_brand_prompt(brand_path: str) -> Tuple[str, BrandPolicy]:
     brand_policy = BrandPolicy.from_dict(front_matter)
     
     return brand_prompt_text, brand_policy
+
+def get_brand_prompt_path(brand_id: str, brands_dir: str = "brands") -> str | None:
+    """Returns the full path to a brand's prompt file if it exists."""
+    # Ensure brands_dir is an absolute path relative to the project root
+    project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    path = os.path.join(project_root, brands_dir, brand_id, "prompt.md")
+    
+    if os.path.exists(path):
+        return path
+    return None
+
+def get_available_brands(brands_dir: str = "brands") -> list[str]:
+    """Returns a list of available brand IDs by scanning the brands directory."""
+    project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    full_brands_dir = os.path.join(project_root, brands_dir)
+
+    if not os.path.isdir(full_brands_dir):
+        return []
+    
+    return [d for d in os.listdir(full_brands_dir) if os.path.isdir(os.path.join(full_brands_dir, d))]
 
 

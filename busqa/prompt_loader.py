@@ -14,7 +14,6 @@ def load_unified_rubrics(path: str = "config/rubrics_unified.yaml") -> Dict[str,
     total_weight = sum(criteria.values())
     
     if abs(total_weight - 1.0) > 0.01:  # cho phép một sai số nhỏ
-        print(f"Warning: Total weights sum to {total_weight}, normalizing to 1.0")
         for key in criteria:
             criteria[key] = criteria[key] / total_weight
         data['criteria'] = criteria

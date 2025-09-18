@@ -7,6 +7,8 @@ from typing import List, Dict, Any, Optional
 import logging
 import json
 from dataclasses import dataclass
+import math
+import random
 
 try:
     import httpx
@@ -56,22 +58,28 @@ class HighPerformanceAPIClient:
             )
         else:
             self.client = None
-            logger.warning("httpx not available, falling back to requests")
+            pass  # httpx not available, falling back to requests
         
-        # Rate limiting
-        self.rate_limiter = asyncio.Semaphore(self.config.rate_limit_per_second)
-        self.last_request_time = {}
+        # Token-bucket rate limiting (true RPS control)
+        self._tokens = self.config.rate_limit_per_second
+        self._bucket_capacity = max(1, self.config.rate_limit_per_second)
+        self._token_lock = asyncio.Lock()
+        self._token_available = asyncio.Condition(self._token_lock)
+        self._refill_task = None
         
         # Initialize Redis if available
         if REDIS_AVAILABLE and redis_url and self.config.enable_caching:
             try:
                 self.redis_client = aioredis.from_url(redis_url)
-                logger.info("✅ Redis caching enabled")
+                pass  # Redis caching enabled
             except Exception as e:
-                logger.warning(f"Redis connection failed: {e}")
+                pass  # Redis connection failed
                 self.redis_client = None
         
     async def __aenter__(self):
+        # Start token refill loop
+        if self._refill_task is None:
+            self._refill_task = asyncio.create_task(self._refill_tokens_loop())
         return self
         
     async def __aexit__(self, exc_type, exc_val, exc_tb):
@@ -79,6 +87,36 @@ class HighPerformanceAPIClient:
             await self.client.aclose()
         if self.redis_client:
             await self.redis_client.close()
+        # Stop token refill loop
+        if self._refill_task:
+            self._refill_task.cancel()
+            try:
+                await self._refill_task
+            except asyncio.CancelledError:
+                pass
+            self._refill_task = None
+
+    async def _refill_tokens_loop(self):
+        """Background task to refill tokens at a steady rate."""
+        # Refill one token every interval seconds
+        interval = 1.0 / max(1, self.config.rate_limit_per_second)
+        try:
+            while True:
+                await asyncio.sleep(interval)
+                async with self._token_lock:
+                    if self._tokens < self._bucket_capacity:
+                        self._tokens += 1
+                        # Wake up one waiter
+                        self._token_available.notify(1)
+        except asyncio.CancelledError:
+            return
+
+    async def _acquire_token(self):
+        """Wait until a rate-limit token is available."""
+        async with self._token_lock:
+            while self._tokens <= 0:
+                await self._token_available.wait()
+            self._tokens -= 1
     
     async def _get_from_cache(self, key: str) -> Optional[Dict[str, Any]]:
         """Get data from Redis cache"""
@@ -89,7 +127,7 @@ class HighPerformanceAPIClient:
             if cached:
                 return json.loads(cached)
         except Exception as e:
-            logger.debug(f"Cache get error: {e}")
+            pass  # Cache get error
         return None
     
     async def _set_cache(self, key: str, data: Dict[str, Any]) -> None:
@@ -103,7 +141,7 @@ class HighPerformanceAPIClient:
                 json.dumps(data, default=str)
             )
         except Exception as e:
-            logger.debug(f"Cache set error: {e}")
+            pass  # Cache set error
         
     async def fetch_conversation_batch(self, conversation_ids: List[str]) -> List[Dict[str, Any]]:
         """Fetch multiple conversations với connection pooling và caching"""
@@ -113,7 +151,6 @@ class HighPerformanceAPIClient:
             cache_key = f"conv:{conv_id}:messages"
             cached_data = await self._get_from_cache(cache_key)
             if cached_data:
-                logger.debug(f"Cache hit for {conv_id}")
                 return {
                     "conversation_id": conv_id,
                     "data": cached_data,
@@ -121,9 +158,8 @@ class HighPerformanceAPIClient:
                     "cached": True
                 }
             
-            async with self.rate_limiter:
-                # Adaptive rate limiting
-                await self._adaptive_sleep()
+            # True RPS control
+            await self._acquire_token()
                 
                 try:
                     if HTTPX_AVAILABLE and self.client:
@@ -151,14 +187,12 @@ class HighPerformanceAPIClient:
                         "cached": False
                     }
                 except Exception as e:
-                    logger.error(f"Error fetching {conv_id}: {e}")
                     return {
                         "conversation_id": conv_id,
                         "error": str(e),
                         "status": "error"
                     }
         
-        # Fetch all conversations concurrently
         start_time = time.time()
         tasks = [fetch_single(conv_id) for conv_id in conversation_ids]
         results = await asyncio.gather(*tasks, return_exceptions=False)
@@ -166,20 +200,7 @@ class HighPerformanceAPIClient:
         elapsed = time.time() - start_time
         success_count = len([r for r in results if r.get("status") == "success"])
         cache_hits = len([r for r in results if r.get("cached")])
-        
-        logger.info(f"✅ Fetched {success_count}/{len(conversation_ids)} conversations in {elapsed:.1f}s")
-        logger.info(f"📦 Cache hits: {cache_hits}/{len(conversation_ids)} ({cache_hits/len(conversation_ids)*100:.1f}%)")
-        
+                
         return results
     
-    async def _adaptive_sleep(self):
-        """Adaptive rate limiting based on system load"""
-        # Simple adaptive sleep - can be enhanced with more sophisticated algorithms
-        base_sleep = 1.0 / self.config.rate_limit_per_second
-        await asyncio.sleep(base_sleep)
 
-# Usage example in batch_evaluator.py:
-"""
-async with HighPerformanceAPIClient(base_url) as api_client:
-    api_results = await api_client.fetch_conversation_batch(conversation_ids)
-"""

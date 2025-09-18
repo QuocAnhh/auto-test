@@ -8,6 +8,11 @@ class Message(BaseModel):
     sender_name: Optional[str] = None
     text: str = ""
 
+class Conversation(BaseModel):
+    conversation_id: str
+    messages: List[Message]
+    metadata: Optional[Dict[str, Any]] = None
+
 class LLMOutput(BaseModel):
     version: str
     detected_flow: str = ""  # thay đổi từ flow_id sang detected_flow
@@ -19,4 +24,4 @@ class LLMOutput(BaseModel):
     tags: List[str] = Field(default_factory=list)
     risks: List[str] = Field(default_factory=list)
     suggestions: List[str] = Field(default_factory=list)
-    
+

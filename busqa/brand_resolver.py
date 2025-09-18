@@ -27,7 +27,6 @@ class BrandResolver:
         
         # Log mapped bots for debugging
         mapped_bots = self._map.get_all_mapped_bots()
-        logger.info(f"BrandResolver initialized with {len(mapped_bots)} mapped bots: {mapped_bots}")
 
     def resolve_by_bot_id(self, bot_id: Optional[str]) -> Tuple[str, BrandPolicy]:
         """
@@ -50,20 +49,14 @@ class BrandResolver:
                 # Load brand prompt và cache kết quả
                 brand_prompt_text, brand_policy = load_brand_prompt(prompt_path)
                 self._cache[prompt_path] = (brand_prompt_text, brand_policy)
-                logger.debug(f"Loaded and cached brand: {brand_id} from {prompt_path}")
             
             brand_prompt_text, brand_policy = self._cache[prompt_path]
             
-            # Log resolution cho debugging (chỉ khi bot_id thay đổi)
-            if bot_id:
-                logger.debug(f"Resolved bot_id={bot_id} -> brand_id={brand_id}")
-            else:
-                logger.debug(f"Used fallback brand: {brand_id}")
+            # Resolution completed
             
             return brand_prompt_text, brand_policy
             
         except Exception as e:
-            logger.error(f"Failed to resolve brand for bot_id={bot_id}: {e}")
             raise
     
     def get_cache_stats(self) -> Dict[str, int]:

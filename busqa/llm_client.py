@@ -7,9 +7,17 @@ import google.generativeai as genai
 
 # Thread pool tối ưu cho Docker (giới hạn theo cores) - ULTRA HIGH PERFORMANCE
 import os
-_max_workers = min(200, max(20, os.cpu_count() * 8))  # Tăng workers để hỗ trợ concurrency cao
+
+# Make thread pool size configurable, with safer defaults
+_env_workers = os.getenv("GEMINI_MAX_WORKERS")
+try:
+    _env_workers_int = int(_env_workers) if _env_workers else None
+except Exception:
+    _env_workers_int = None
+
+_default_workers = max(8, (os.cpu_count() or 2) * 4)
+_max_workers = min(64, _env_workers_int or _default_workers)
 _gemini_executor = ThreadPoolExecutor(max_workers=_max_workers, thread_name_prefix="gemini")
-print(f"🚀 Gemini ThreadPool initialized with {_max_workers} workers for ultra-high concurrency")
 
 # Global OpenAI client với connection pooling
 _openai_client_cache = {}
@@ -47,6 +55,7 @@ def call_llm(api_key: str, model: str, system_prompt: str, user_prompt: str, bas
         }
         prompt = system_prompt + "\n\n" + user_prompt
         
+        import random
         for attempt in range(max_retries + 1):
             try:
                 model_obj = genai.GenerativeModel(model)
@@ -90,6 +99,24 @@ def call_llm(api_key: str, model: str, system_prompt: str, user_prompt: str, bas
                     raise e
 
 
+class LLMClient:
+    def __init__(self, api_key: str = None, base_url: str = None):
+        self.api_key = api_key or os.getenv("GEMINI_API_KEY")
+        self.base_url = base_url
+        if not self.api_key:
+            raise ValueError("API key must be provided either as an argument or via GEMINI_API_KEY env var.")
+
+    async def call_async(self, model: str, system_prompt: str, user_prompt: str, temperature: float = 0.2, max_retries: int = 3) -> Dict[str, Any]:
+        return await call_llm_async(
+            api_key=self.api_key,
+            model=model,
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            base_url=self.base_url,
+            temperature=temperature,
+            max_retries=max_retries
+        )
+
 async def call_llm_async(api_key: str, model: str, system_prompt: str, user_prompt: str, base_url: str | None = None, temperature: float = 0.2, max_retries: int = 3) -> Dict[str, Any]:
     """Async version của call_llm cho true concurrent processing"""
     if model.startswith("gemini"):
@@ -116,18 +143,22 @@ async def call_llm_async(api_key: str, model: str, system_prompt: str, user_prom
                 return json.loads(resp.text)
             except asyncio.TimeoutError:
                 if attempt < max_retries:
-                    await asyncio.sleep(0.2)  # Giảm sleep time cho retry nhanh hơn
+                    # Exponential backoff with jitter
+                    backoff = 0.2 * (2 ** attempt) + random.uniform(0, 0.2)
+                    await asyncio.sleep(min(5.0, backoff))
                 else:
                     raise Exception(f"Gemini API timeout after 30s (attempt {attempt+1}/{max_retries+1})")
             except Exception as e:
                 if attempt < max_retries:
-                    await asyncio.sleep(0.2 * (attempt + 1))  # Giảm sleep time
+                    backoff = 0.2 * (2 ** attempt) + random.uniform(0, 0.2)
+                    await asyncio.sleep(min(5.0, backoff))
                 else:
                     raise e
     else:
         # Sử dụng cached AsyncOpenAI client cho true async với connection pooling
         client = _get_async_openai_client(api_key, base_url)
         
+        import random
         for attempt in range(max_retries + 1):
             try:
                 resp = await client.chat.completions.create(
@@ -153,6 +184,7 @@ async def call_llm_async(api_key: str, model: str, system_prompt: str, user_prom
                     pass
                 
                 if attempt < max_retries:
-                    await asyncio.sleep(0.3 * (attempt + 1))  # Async sleep
+                    backoff = 0.2 * (2 ** attempt) + random.uniform(0, 0.2)
+                    await asyncio.sleep(min(5.0, backoff))
                 else:
                     raise e

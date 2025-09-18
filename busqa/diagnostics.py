@@ -1,6 +1,8 @@
 import re
 from typing import List, TypedDict
 from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor
+import itertools
 
 
 class DiagnosticHit(TypedDict):
@@ -26,42 +28,44 @@ def detect_operational_readiness(messages, brand_policy, brand_prompt_text: str)
                 year_match = re.search(r'20(1|2)\d', user_text)
                 if year_match:
                     user_birth_year = int(year_match.group())
-    
-    hits.extend(_detect_double_room_violation(agent_responses, brand_prompt_text))
-    
-    if user_birth_year:
-        hits.extend(_detect_child_policy_miss(agent_responses, user_birth_year, current_year))
-    
-    if hasattr(brand_policy, 'no_route_validation') and brand_policy.no_route_validation:
-        hits.extend(_detect_pickup_scope_violation(agent_responses))
-    
-    hits.extend(_detect_fare_math_inconsistent(agent_responses))
-    
-    hits.extend(_detect_handover_sla_missing(messages, agent_responses))
+
+    with ThreadPoolExecutor() as executor:
+        futures = []
+        futures.append(executor.submit(_detect_double_room_violation, agent_responses, brand_prompt_text))
+        if user_birth_year:
+            futures.append(executor.submit(_detect_child_policy_miss, agent_responses, user_birth_year, current_year))
+        if hasattr(brand_policy, 'no_route_validation') and brand_policy.no_route_validation:
+            futures.append(executor.submit(_detect_pickup_scope_violation, agent_responses))
+        futures.append(executor.submit(_detect_fare_math_inconsistent, agent_responses))
+        futures.append(executor.submit(_detect_handover_sla_missing, messages, agent_responses))
+
+        for future in futures:
+            hits.extend(future.result())
     
     return hits
 
 
 def detect_risk_compliance(messages, brand_policy) -> List[DiagnosticHit]:
     """phát hiện các vi phạm rủi ro tuân thủ chính sách"""
-    hits = []
-    
     agent_responses = []
     for i, msg in enumerate(messages):
         if getattr(msg, 'sender_type', None) == "agent":
             agent_responses.append((i, getattr(msg, 'text', '') or ''))
+
+    with ThreadPoolExecutor() as executor:
+        futures = []
+        if getattr(brand_policy, 'forbid_phone_collect', False):
+            futures.append(executor.submit(_detect_forbidden_phone_collect, agent_responses))
+        
+        futures.append(executor.submit(_detect_promise_hold_seat, agent_responses))
+        futures.append(executor.submit(_detect_payment_policy_violation, agent_responses, brand_policy))
+        
+        if getattr(brand_policy, 'pdpa_consent_required', False):
+            futures.append(executor.submit(_detect_pdpa_consent_missing, agent_responses))
+
+        results = [future.result() for future in futures]
     
-    if getattr(brand_policy, 'forbid_phone_collect', False):
-        hits.extend(_detect_forbidden_phone_collect(agent_responses))
-    
-    hits.extend(_detect_promise_hold_seat(agent_responses))
-    
-    hits.extend(_detect_payment_policy_violation(agent_responses, brand_policy))
-    
-    if getattr(brand_policy, 'pdpa_consent_required', False):
-        hits.extend(_detect_pdpa_consent_missing(agent_responses))
-    
-    return hits
+    return list(itertools.chain.from_iterable(results))
 
 
 def _detect_double_room_violation(agent_responses: List[tuple], brand_prompt_text: str) -> List[DiagnosticHit]:

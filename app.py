@@ -10,6 +10,7 @@ import os
 from pathlib import Path
 
 import streamlit as st
+import threading
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
@@ -1791,25 +1792,16 @@ if eval_button and conversation_ids:
             else:
                 status_text.text(f"🚀 Starting evaluation: {current}/{total} ({progress:.1%})")
         
-        # Stream callback to collect results as they complete
+        # Queue-based streaming to avoid updating Streamlit from async loop
+        import queue, threading
+        stream_queue: "queue.Queue[dict]" = queue.Queue()
+
         def stream_callback(result):
-            """Called when each conversation result is ready - collects results for later display"""
-            st.session_state.streaming_results.append(result)
-            st.session_state.streaming_status["completed"] += 1
-            
-            # Log successful streaming collection (can be seen in terminal/logs)
-            if "error" not in result:
-                conv_id = result.get("conversation_id", "unknown")
-                score = result.get("result", {}).get("total_score", 0)
-                print(f"✅ Streamed: {conv_id[-10:]} - {score:.1f} pts")  # Debug logging
-            
-            # Update streaming display periodically
-            completed = len(st.session_state.streaming_results)
-            if completed % 5 == 0 or completed == 1:  # Update every 5 results or first result
-                try:
-                    _update_streaming_display()
-                except Exception as e:
-                    print(f"Error updating streaming display: {e}")  # Debug logging
+            """Enqueue each finished result; UI thread will render."""
+            try:
+                stream_queue.put(result, block=False)
+            except Exception:
+                pass
             
         def _update_streaming_display():
             """Update streaming display with current results"""
@@ -1842,13 +1834,13 @@ if eval_button and conversation_ids:
                         avg_score = sum(r.get("result", {}).get("total_score", 0) for r in successful_results) / len(successful_results)
                         st.metric("Avg Score", f"{avg_score:.1f}", delta="pts")
             
-            # Update results display - show latest 6 results only for performance
+            # Update results display - stream detailed cards for latest results
             with streaming_results_placeholder.container():
                 if successful > 0:
-                    st.subheader("📊 Latest Completed Results")
+                    st.subheader("📥 Streaming Completed Results")
                     
                     successful_results = [r for r in st.session_state.streaming_results if "error" not in r]
-                    latest_results = successful_results[-6:] if len(successful_results) > 6 else successful_results
+                    latest_results = successful_results[-10:] if len(successful_results) > 10 else successful_results
                     
                     # Display in 2 columns
                     col_left, col_right = st.columns(2)
@@ -1872,14 +1864,18 @@ if eval_button and conversation_ids:
                         target_col = col_left if i % 2 == 0 else col_right
                         
                         with target_col:
-                            st.markdown(f"""
-                            **{score_color} {conv_id[-10:]}** | {flow}  
-                            Score: **{float(score):.1f}** | Label: {label}  
-                            {f"⚠️ {violations} violations" if violations > 0 else "✅ Clean"}
-                            """)
+                            with st.expander(f"{score_color} {conv_id} • {flow} • {float(score):.1f}", expanded=False):
+                                # Compact header line
+                                st.caption(f"Label: {label} • Confidence: {float(confidence)*100 if confidence <= 1 else float(confidence):.0f}% • Violations: {violations}")
+                                # Detailed view
+                                try:
+                                    display_conversation_details(result, rubrics_cfg)
+                                except Exception:
+                                    # Fallback to raw json if details view fails
+                                    st.json(result)
                     
-                    if len(successful_results) > 6:
-                        st.caption(f"Showing latest 6 of {len(successful_results)} completed results")
+                    if len(successful_results) > len(latest_results):
+                        st.caption(f"Showing latest {len(latest_results)} of {len(successful_results)} completed results")
                 
                 # Show recent errors briefly
                 failed_results = [r for r in st.session_state.streaming_results if "error" in r]
@@ -1890,7 +1886,7 @@ if eval_button and conversation_ids:
                         error_msg = result.get('error', 'Unknown error')
                         st.error(f"❌ **{conv_id[-10:]}**: {error_msg}")
                 
-                st.caption("🔄 Results update every 5 completions")
+                st.caption("🔄 Streaming live: updates on every completion")
         
 
         
@@ -1933,26 +1929,60 @@ if eval_button and conversation_ids:
             # Get brand prompt path for bulk evaluation
             brand_prompt_path = f"brands/{selected_brand}/prompt.md"
             
-            # Note: bulk evaluator may not support streaming yet
-            st.warning("⚠️ Bulk mode doesn't support streaming yet - results will show after completion")
-            results = asyncio.run(evaluate_many_raw_conversations(
-                raw_conversations=st.session_state.bulk_conversations,
-                brand_prompt_path=brand_prompt_path,
-                rubrics="config/rubrics_unified.yaml",
-                model=llm_model,
-                temperature=temperature,
-                apply_diagnostics=apply_diagnostics,
-                llm_api_key=llm_api_key,
-                llm_base_url=llm_base_url.strip() or None,
-                max_concurrency=max_concurrency
-            ))
+            # Run bulk evaluation WITH streaming using background thread + queue
+            from tools.bulk_list_evaluate import evaluate_many_raw_conversations
+
+            results_container = {"results": None, "error": None}
+            # Capture a local copy to avoid accessing Streamlit session state from a thread
+            _bulk_conversations_local = list(st.session_state.get('bulk_conversations', []))
+
+            def _bulk_runner():
+                try:
+                    res = asyncio.run(evaluate_many_raw_conversations(
+                        raw_conversations=_bulk_conversations_local,
+                        brand_prompt_path=brand_prompt_path,
+                        rubrics="config/rubrics_unified.yaml",
+                        model=llm_model,
+                        temperature=temperature,
+                        apply_diagnostics=apply_diagnostics,
+                        llm_api_key=llm_api_key,
+                        llm_base_url=llm_base_url.strip() or None,
+                        max_concurrency=max_concurrency,
+                        stream_callback=stream_callback
+                    ))
+                    results_container["results"] = res
+                except Exception as e:
+                    results_container["error"] = str(e)
+
+            t = threading.Thread(target=_bulk_runner, daemon=True)
+            t.start()
+
+            import time as _time
+            while t.is_alive() or not stream_queue.empty():
+                try:
+                    while True:
+                        item = stream_queue.get_nowait()
+                        st.session_state.streaming_results.append(item)
+                        st.session_state.streaming_status["completed"] += 1
+                        completed = len(st.session_state.streaming_results)
+                        try:
+                            _update_streaming_display()
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
+                _time.sleep(0.05)
+
+            if results_container["error"]:
+                raise Exception(results_container["error"])
+            results = results_container["results"]
             
         else:
             # Use high-speed batch evaluator with streaming
             from busqa.batch_evaluator import evaluate_conversations_high_speed
-            
+
             status_text.text("Using high-speed batch evaluation with streaming...")
-            
+
             # Enhanced progress callback with performance metrics
             def enhanced_progress_callback(progress, completed, total):
                 progress_callback(progress, completed, total)
@@ -1977,28 +2007,62 @@ if eval_button and conversation_ids:
                     except Exception as e:
                         pass  # Don't break on performance metric errors
             
-            # Run evaluation with streaming and all performance features
-            results = asyncio.run(evaluate_conversations_high_speed(
-                conversation_ids=conversation_ids,
-                base_url=base_url,
-                rubrics_cfg=rubrics_cfg,
-                brand_policy=brand_policy if brand_mode == "single" else None,
-                brand_prompt_text=brand_prompt_text if brand_mode == "single" else None,
-                llm_api_key=llm_api_key,
-                llm_model=llm_model,
-                temperature=temperature,
-                llm_base_url=llm_base_url.strip() or None,
-                apply_diagnostics=apply_diagnostics,
-                diagnostics_cfg=diagnostics_cfg,
-                max_concurrency=max_concurrency,
-                progress_callback=enhanced_progress_callback,
-                stream_callback=stream_callback,  # Stream results to UI
-                brand_resolver=brand_resolver if brand_mode == "auto-by-botid" else None,
-                use_high_performance_api=use_high_performance_api,  # ✅ Connection pooling
-                redis_url=redis_url if enable_caching else None,    # ✅ Redis caching
-                api_rate_limit=api_rate_limit,                      # ✅ Rate limiting
-                use_progressive_batching=use_progressive_batching   # ✅ PROGRESSIVE BATCHING - Fixes convoy effect!
-            ))
+            # Run evaluation with streaming in background thread; UI consumes queue
+            results_container = {"results": None, "error": None}
+
+            def _runner():
+                try:
+                    res = asyncio.run(evaluate_conversations_high_speed(
+                        conversation_ids=conversation_ids,
+                        base_url=base_url,
+                        rubrics_cfg=rubrics_cfg,
+                        brand_policy=brand_policy if brand_mode == "single" else None,
+                        brand_prompt_text=brand_prompt_text if brand_mode == "single" else None,
+                        llm_api_key=llm_api_key,
+                        llm_model=llm_model,
+                        temperature=temperature,
+                        llm_base_url=llm_base_url.strip() or None,
+                        apply_diagnostics=apply_diagnostics,
+                        diagnostics_cfg=diagnostics_cfg,
+                        max_concurrency=max_concurrency,
+                        progress_callback=enhanced_progress_callback,
+                        stream_callback=stream_callback,
+                        brand_resolver=brand_resolver if brand_mode == "auto-by-botid" else None,
+                        use_high_performance_api=use_high_performance_api,
+                        redis_url=redis_url if enable_caching else None,
+                        api_rate_limit=api_rate_limit,
+                        use_progressive_batching=use_progressive_batching
+                    ))
+                    results_container["results"] = res
+                except Exception as e:
+                    results_container["error"] = str(e)
+
+            t = threading.Thread(target=_runner, daemon=True)
+            t.start()
+
+            # UI consume loop
+            import time as _time
+            while t.is_alive() or not stream_queue.empty():
+                try:
+                    while True:
+                        item = stream_queue.get_nowait()
+                        # Update session state and UI in main thread
+                        st.session_state.streaming_results.append(item)
+                        st.session_state.streaming_status["completed"] += 1
+                    
+                        completed = len(st.session_state.streaming_results)
+                        if completed % 5 == 0 or completed == 1:
+                            try:
+                                _update_streaming_display()
+                            except Exception:
+                                pass
+                except Exception:
+                    pass
+                _time.sleep(0.05)
+
+            if results_container["error"]:
+                raise Exception(results_container["error"])
+            results = results_container["results"]
         
         # Final processing
         total_time = time.time() - start_time

@@ -1,16 +1,10 @@
-# Web Framework
-Flask==3.0.0
-Flask-CORS==4.0.0
-
-# Original Streamlit (kept for compatibility)
+sseclient-py==1.8.0
 streamlit==1.37.1
-
-# Core dependencies
 requests==2.32.3
 python-dateutil==2.9.0.post0
 pydantic==2.8.2
 openai==1.43.0
-python-dotenv==1.0.1
+python-dotenv
 google-generativeai==0.7.2
 PyYAML==6.0.2
 numpy==1.26.4
@@ -20,14 +14,5 @@ plotly==5.17.0
 reportlab==4.2.2
 xlsxwriter==3.2.0
 kaleido==0.2.1
-
-# Performance optimization dependencies
-psutil>=5.9.0
-httpx>=0.25.0
-aiofiles>=23.0.0
-redis>=5.0.0
-aioredis>=2.0.1
-
-# Additional web app dependencies
-gunicorn>=21.0.0
-Werkzeug>=3.0.0
+fastapi
+uvicorn[standard]

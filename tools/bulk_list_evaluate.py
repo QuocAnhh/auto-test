@@ -82,7 +82,6 @@ def test_bearer_token(base_url: str, bearer_token: str, timeout: int = 10) -> bo
         return response.status_code not in [401, 403]
         
     except Exception as e:
-        logger.debug(f"Token test failed: {e}")
         return False
 
 def fetch_conversations_with_messages(config: FetchConfig) -> List[Dict[str, Any]]:
@@ -120,9 +119,7 @@ def fetch_conversations_with_messages(config: FetchConfig) -> List[Dict[str, Any
                     timeout=config.timeout
                 )
                 
-                # Debug: Log request details for troubleshooting
-                logger.debug(f"Request URL: {response.url}")
-                logger.debug(f"Response status: {response.status_code}")
+                # Request completed
                 
                 if response.status_code == 401:
                     # Authentication error - don't retry, fail immediately
@@ -289,7 +286,7 @@ def select_conversations(
     # Apply skip and take
     selected = conversations[skip:skip + take]
     
-    logger.info(f"Selected {len(selected)} conversations using strategy '{strategy}' (skip={skip}, take={take})")
+    # Conversations selected
     return selected
 
 def evaluate_conversation_from_raw(
@@ -433,7 +430,8 @@ async def evaluate_many_raw_conversations(
     apply_diagnostics: bool = True,
     llm_api_key: str = None,
     llm_base_url: str = None,
-    max_concurrency: int = 5
+    max_concurrency: int = 5,
+    stream_callback: Optional[callable] = None
 ) -> List[Dict[str, Any]]:
     """
     Evaluate multiple conversations concurrently with error handling.
@@ -478,6 +476,17 @@ async def evaluate_many_raw_conversations(
                 else:
                     logger.error(f"Failed evaluation: {conversation_id} - {result['error']}")
                 
+                # Emit per-item streaming callback if provided
+                if stream_callback:
+                    try:
+                        if asyncio.iscoroutinefunction(stream_callback):
+                            await stream_callback(result)
+                        else:
+                            # Offload sync callback to thread to avoid blocking event loop
+                            await asyncio.to_thread(stream_callback, result)
+                    except Exception:
+                        pass
+
                 return result
                 
             except Exception as e:
@@ -694,12 +703,12 @@ def main():
         if args.output_json:
             with open(args.output_json, 'w', encoding='utf-8') as f:
                 json.dump(results, f, indent=2, ensure_ascii=False)
-            logger.info(f"Results written to {args.output_json}")
+            pass  # Results written
         
         if args.output_summary:
             with open(args.output_summary, 'w', encoding='utf-8') as f:
                 json.dump(summary, f, indent=2, ensure_ascii=False)
-            logger.info(f"Summary written to {args.output_summary}")
+            pass  # Summary written
         
         if args.output_csv:
             # Simple CSV output
@@ -734,12 +743,11 @@ def main():
                             '',
                             result.get('evaluation_timestamp', '')
                         ])
-            logger.info(f"CSV written to {args.output_csv}")
+            pass  # CSV written
         
         # Log final stats
         success_count = len([r for r in results if "error" not in r])
         error_count = len(results) - success_count
-        logger.info(f"Evaluation completed: {success_count} successful, {error_count} errors")
         
         return 0
         

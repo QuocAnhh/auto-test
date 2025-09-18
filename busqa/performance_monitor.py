@@ -42,7 +42,6 @@ class SystemPerformanceMonitor:
     async def start_monitoring(self):
         """Start continuous performance monitoring"""
         if not PSUTIL_AVAILABLE:
-            logger.warning("psutil not available, performance monitoring disabled")
             return
             
         self.is_monitoring = True
@@ -60,17 +59,14 @@ class SystemPerformanceMonitor:
                     
                     await asyncio.sleep(self.sample_interval)
                 except Exception as e:
-                    logger.error(f"Error collecting metrics: {e}")
                     await asyncio.sleep(self.sample_interval)
         
         # Start monitoring in background
         asyncio.create_task(monitor_loop())
-        logger.info("🔍 Performance monitoring started")
     
     def stop_monitoring(self):
         """Stop performance monitoring"""
         self.is_monitoring = False
-        logger.info("🔍 Performance monitoring stopped")
     
     def _collect_metrics(self) -> PerformanceMetrics:
         """Collect current performance metrics"""
@@ -96,7 +92,6 @@ class SystemPerformanceMonitor:
                 throughput_per_second=throughput
             )
         except Exception as e:
-            logger.debug(f"Error collecting detailed metrics: {e}")
             return PerformanceMetrics()
     
     def update_processed_count(self, count: int):
