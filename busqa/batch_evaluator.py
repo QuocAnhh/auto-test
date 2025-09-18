@@ -33,12 +33,12 @@ logger = logging.getLogger(__name__)
 @dataclass
 class BatchConfig:
     """Config cho batch evaluation tối ưu với progressive batching"""
-    max_concurrency: int = 30  # Giảm xuống để tránh convoy effect
+    max_concurrency: int = 3   # Giảm xuống để tránh timeout
     adaptive_batching: bool = True  # Enable adaptive progressive batching
     initial_batch_size: int = 8    # Start với batch nhỏ để test latency
     progressive_multiplier: float = 1.5  # Tăng batch size dần dần
     max_batch_size: int = 20       # Max batch size để control memory
-    llm_timeout: float = 35.0      # Giảm timeout để fail fast
+    llm_timeout: float = 60.0      # Tăng timeout để tránh timeout
     memory_cleanup_interval: int = 8   # Cleanup thường xuyên hơn
     progress_callback: Optional[callable] = None
     stream_callback: Optional[callable] = None  # Callback để stream kết quả

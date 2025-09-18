@@ -9,27 +9,20 @@ services:
     env_file:
       - .env
     restart: unless-stopped
-    # Performance optimizations
     environment:
       - PYTHONUNBUFFERED=1
-      # Optimize Python for high concurrency
       - PYTHONASYNCIODEBUG=0
-      # Memory optimizations
       - MALLOC_ARENA_MAX=4  # Tăng cho high concurrency
-      # Async optimization
       - PYTHONHASHSEED=0
-      # Redis connection for caching
       - REDIS_URL=redis://redis:6379/0
-    # Resource limits cho container - optimized cho high-throughput
     deploy:
       resources:
         limits:
-          cpus: '8.0'  # Tăng CPU cho high concurrency
-          memory: 16G  # Tăng RAM cho large batches
+          cpus: '8.0'  
+          memory: 16G  
         reservations:
-          cpus: '4.0'  # Tăng reserved CPU
-          memory: 8G   # Tăng reserved memory
-    # Health check
+          cpus: '4.0' 
+          memory: 8G  
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:5000/api/config"]
       interval: 30s

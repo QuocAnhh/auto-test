@@ -160,38 +160,38 @@ class HighPerformanceAPIClient:
             
             # True RPS control
             await self._acquire_token()
-                
-                try:
-                    if HTTPX_AVAILABLE and self.client:
-                        response = await self.client.get(f"/conversations/{conv_id}/messages")
-                        response.raise_for_status()
-                        data = response.json()
-                    else:
-                        # Fallback to sync requests (wrapped in thread)
-                        import requests
-                        loop = asyncio.get_event_loop()
-                        response = await loop.run_in_executor(
-                            None, 
-                            lambda: requests.get(f"{self.base_url}/conversations/{conv_id}/messages", timeout=self.config.timeout)
-                        )
-                        response.raise_for_status()
-                        data = response.json()
-                    
-                    # Cache the result
-                    await self._set_cache(cache_key, data)
-                    
-                    return {
-                        "conversation_id": conv_id,
-                        "data": data,
-                        "status": "success",
-                        "cached": False
-                    }
-                except Exception as e:
-                    return {
-                        "conversation_id": conv_id,
-                        "error": str(e),
-                        "status": "error"
-                    }
+
+            try:
+                if HTTPX_AVAILABLE and self.client:
+                    response = await self.client.get(f"/api/conversations/{conv_id}/messages")
+                    response.raise_for_status()
+                    data = response.json()
+                else:
+                    # Fallback to sync requests (wrapped in thread)
+                    import requests
+                    loop = asyncio.get_event_loop()
+                    response = await loop.run_in_executor(
+                        None,
+                        lambda: requests.get(f"{self.base_url}/api/conversations/{conv_id}/messages", timeout=self.config.timeout)
+                    )
+                    response.raise_for_status()
+                    data = response.json()
+
+                # Cache the result
+                await self._set_cache(cache_key, data)
+
+                return {
+                    "conversation_id": conv_id,
+                    "data": data,
+                    "status": "success",
+                    "cached": False
+                }
+            except Exception as e:
+                return {
+                    "conversation_id": conv_id,
+                    "error": str(e),
+                    "status": "error"
+                }
         
         start_time = time.time()
         tasks = [fetch_single(conv_id) for conv_id in conversation_ids]

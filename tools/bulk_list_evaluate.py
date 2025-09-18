@@ -31,6 +31,7 @@ from busqa.prompt_loader import load_unified_rubrics
 from busqa.brand_specs import load_brand_prompt
 from busqa.prompting import build_system_prompt_unified, build_user_instruction
 from busqa.llm_client import call_llm
+from busqa.batch_evaluator import evaluate_conversations_high_speed
 from busqa.evaluator import coerce_llm_json_unified
 from busqa.aggregate import make_summary
 from busqa.diagnostics import detect_operational_readiness, detect_risk_compliance
@@ -678,18 +679,39 @@ def main():
                 print(f"  {conv_id}")
             return 0
         
-        # Step 3: Evaluate conversations
-        logger.info(f"Evaluating {len(selected_conversations)} conversations")
-        results = asyncio.run(evaluate_many_raw_conversations(
-            selected_conversations,
-            brand_prompt_path=brand_prompt_path,
-            rubrics=args.rubrics,
-            model=args.llm_model,
-            temperature=args.temperature,
-            apply_diagnostics=args.apply_diagnostics,
+        # Step 3: Evaluate conversations using HighSpeedBatchEvaluator
+        logger.info(f"Evaluating {len(selected_conversations)} conversations (high-speed path)")
+        # Preload configs once
+        rubrics_cfg = load_unified_rubrics(args.rubrics)
+        brand_prompt_text, brand_policy = load_brand_prompt(brand_prompt_path)
+        diagnostics_cfg = None
+        if args.apply_diagnostics:
+            diagnostics_path = "config/diagnostics.yaml"
+            if os.path.exists(diagnostics_path):
+                import yaml
+                with open(diagnostics_path, 'r', encoding='utf-8') as f:
+                    diagnostics_cfg = yaml.safe_load(f)
+
+        # Extract conversation_ids
+        conversation_ids = [conv.get("conversation_id") for conv in selected_conversations if conv.get("conversation_id")]
+        # Build base_url for HighSpeed API client from list-base-url
+        base_url = args.list_base_url
+
+        results = asyncio.run(evaluate_conversations_high_speed(
+            conversation_ids=conversation_ids,
+            base_url=base_url,
+            rubrics_cfg=rubrics_cfg,
+            brand_policy=brand_policy,
+            brand_prompt_text=brand_prompt_text,
             llm_api_key=llm_api_key,
+            llm_model=args.llm_model,
+            temperature=args.temperature,
             llm_base_url=args.llm_base_url,
-            max_concurrency=args.max_concurrency
+            apply_diagnostics=args.apply_diagnostics,
+            diagnostics_cfg=diagnostics_cfg,
+            max_concurrency=args.max_concurrency,
+            use_high_performance_api=True,
+            use_progressive_batching=True
         ))
         
         # Step 4: Create summary

@@ -1,0 +1,37 @@
+version: '3.8'
+
+services:
+  app:
+    build: .
+    env_file:
+      - .env
+    environment:
+      - GEMINI_MAX_WORKERS=40
+      - PYTHONUNBUFFERED=1
+      - PYTHONASYNCIODEBUG=0
+      - LIST_API_BASE_URL=https://live-demo.agenticai.pro.vn
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - GOOGLE_API_KEY=${GEMINI_API_KEY}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - BEARER_TOKEN=${BEARER_TOKEN}
+    ports:
+      - "8000:8000"
+    volumes:
+      - .:/app
+      - /app/__pycache__
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # Optional: Redis for caching (if needed)
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru
+    restart: unless-stopped
+                                                                                                                                                                                                                                                                                                              

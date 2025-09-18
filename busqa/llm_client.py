@@ -1,4 +1,5 @@
 import json, re, time
+import random
 import asyncio
 from typing import Any, Dict
 from concurrent.futures import ThreadPoolExecutor
@@ -18,6 +19,8 @@ except Exception:
 _default_workers = max(8, (os.cpu_count() or 2) * 4)
 _max_workers = min(64, _env_workers_int or _default_workers)
 _gemini_executor = ThreadPoolExecutor(max_workers=_max_workers, thread_name_prefix="gemini")
+
+ 
 
 # Global OpenAI client với connection pooling
 _openai_client_cache = {}
@@ -55,7 +58,6 @@ def call_llm(api_key: str, model: str, system_prompt: str, user_prompt: str, bas
         }
         prompt = system_prompt + "\n\n" + user_prompt
         
-        import random
         for attempt in range(max_retries + 1):
             try:
                 model_obj = genai.GenerativeModel(model)
@@ -136,9 +138,11 @@ async def call_llm_async(api_key: str, model: str, system_prompt: str, user_prom
             try:
                 # Dùng thread pool riêng với nhiều workers - tăng timeout
                 loop = asyncio.get_event_loop()
+                # Revert to 30s default timeout
+                timeout_seconds = 30.0
                 resp = await asyncio.wait_for(
                     loop.run_in_executor(_gemini_executor, _gemini_call),
-                    timeout=30.0  # Timeout 30s cho mỗi LLM call
+                    timeout=timeout_seconds
                 )
                 return json.loads(resp.text)
             except asyncio.TimeoutError:
@@ -158,7 +162,6 @@ async def call_llm_async(api_key: str, model: str, system_prompt: str, user_prom
         # Sử dụng cached AsyncOpenAI client cho true async với connection pooling
         client = _get_async_openai_client(api_key, base_url)
         
-        import random
         for attempt in range(max_retries + 1):
             try:
                 resp = await client.chat.completions.create(

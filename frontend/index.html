@@ -1,0 +1,239 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+    <meta http-equiv="Pragma" content="no-cache">
+    <meta http-equiv="Expires" content="0">
+    <title>🚌 BusQA LLM Evaluator</title>
+    
+    <!-- Bootstrap CSS -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <!-- Bootstrap Icons -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.0/font/bootstrap-icons.css" rel="stylesheet">
+    <!-- Chart.js -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <!-- Custom CSS -->
+    <link href="/static/assets/css/main.css" rel="stylesheet">
+</head>
+<body>
+    <!-- Navigation -->
+    <nav class="navbar navbar-expand-lg navbar-dark bg-primary">
+        <div class="container-fluid">
+            <a class="navbar-brand" href="#">
+                <i class="bi bi-bus-front"></i> BusQA LLM Evaluator
+            </a>
+            <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav">
+                <span class="navbar-toggler-icon"></span>
+            </button>
+            <div class="collapse navbar-collapse" id="navbarNav">
+                <ul class="navbar-nav me-auto">
+                    <li class="nav-item">
+                        <a class="nav-link active" href="#" data-tab="results">
+                            <i class="bi bi-table"></i> Results Table
+                        </a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link" href="#" data-tab="analytics">
+                            <i class="bi bi-graph-up"></i> Analytics
+                        </a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link" href="#" data-tab="performance">
+                            <i class="bi bi-speedometer2"></i> Performance
+                        </a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link" href="#" data-tab="export">
+                            <i class="bi bi-download"></i> Export
+                        </a>
+                    </li>
+                </ul>
+                <div class="navbar-text">
+                    <span class="badge bg-success" id="api-status">API Connected</span>
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    <!-- Main Content -->
+    <div class="container-fluid mt-3">
+        <!-- Configuration Sidebar -->
+        <div class="row">
+            <div class="col-md-3">
+                <div class="card">
+                    <div class="card-header">
+                        <h5><i class="bi bi-gear"></i> Configuration</h5>
+                    </div>
+                    <div class="card-body">
+                        <!-- API Configuration -->
+                        <div class="mb-3">
+                            <label for="baseUrl" class="form-label">Base URL</label>
+                            <input type="text" class="form-control" id="baseUrl" value="http://localhost:8000">
+                        </div>
+                        
+                        <div class="mb-3">
+                            <label for="brandSelect" class="form-label">Brand</label>
+                            <select class="form-select" id="brandSelect">
+                                <option value="">Loading brands...</option>
+                            </select>
+                        </div>
+
+                        <div class="mb-3">
+                            <label for="modelSelect" class="form-label">Model</label>
+                            <select class="form-select" id="modelSelect">
+                                <option value="gemini-1.5-flash">Gemini 1.5 Flash</option>
+                                <option value="gemini-1.5-pro">Gemini 1.5 Pro</option>
+                                <option value="gemini-2.5-flash">Gemini 2.5 Flash</option>
+                                <option value="gpt-4">GPT-4</option>
+                                <option value="gpt-4.1-mini">GPT-4.1-mini</option>
+                            </select>
+                        </div>
+
+                        <div class="mb-3">
+                            <label for="temperature" class="form-label">Temperature: <span id="tempValue">0.2</span></label>
+                            <input type="range" class="form-range" id="temperature" min="0" max="1" step="0.1" value="0.2">
+                        </div>
+
+                        <div class="mb-3">
+                            <label for="maxConcurrency" class="form-label">Max Concurrency: <span id="concurrencyValue">10</span></label>
+                            <input type="range" class="form-range" id="maxConcurrency" min="1" max="30" step="1" value="10">
+                        </div>
+
+                        <!-- Input Methods Container -->
+                        <div id="inputMethodsContainer"></div>
+
+                        <!-- Action Buttons -->
+                        <div class="d-grid gap-2">
+                            <button class="btn btn-primary" id="evaluateBtn">
+                                <i class="bi bi-play-circle"></i> Start Evaluation
+                            </button>
+                            <button class="btn btn-secondary" id="stopBtn" disabled>
+                                <i class="bi bi-stop-circle"></i> Stop
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Main Content Area -->
+            <div class="col-md-9">
+                <!-- Tab Content -->
+                <div id="tabContent">
+                    <!-- Results Table Tab -->
+                    <div id="results-tab" class="tab-pane active">
+                        <div class="card">
+                            <div class="card-header d-flex justify-content-between align-items-center">
+                                <h5><i class="bi bi-table"></i> Evaluation Results</h5>
+                                <div>
+                                    <button class="btn btn-sm btn-outline-primary" id="refreshResults">
+                                        <i class="bi bi-arrow-clockwise"></i> Refresh
+                                    </button>
+                                </div>
+                            </div>
+                            <div class="card-body">
+                                <div id="resultsTable">
+                                    <div class="text-center text-muted">
+                                        <i class="bi bi-inbox display-4"></i>
+                                        <p>No evaluation results yet. Start an evaluation to see results here.</p>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Analytics Tab -->
+                    <div id="analytics-tab" class="tab-pane">
+                        <div class="card">
+                            <div class="card-header">
+                                <h5><i class="bi bi-graph-up"></i> Performance Analytics</h5>
+                            </div>
+                            <div class="card-body">
+                                <div id="analyticsContent">
+                                    <div class="text-center text-muted">
+                                        <i class="bi bi-bar-chart display-4"></i>
+                                        <p>No analytics data available. Run an evaluation to see analytics.</p>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Performance Tab -->
+                    <div id="performance-tab" class="tab-pane">
+                        <div class="card">
+                            <div class="card-header">
+                                <h5><i class="bi bi-speedometer2"></i> Performance Dashboard</h5>
+                            </div>
+                            <div class="card-body">
+                                <div id="performanceContent">
+                                    <div class="text-center text-muted">
+                                        <i class="bi bi-speedometer2 display-4"></i>
+                                        <p>No performance data available. Run an evaluation to see performance metrics.</p>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Export Tab -->
+                    <div id="export-tab" class="tab-pane">
+                        <div class="card">
+                            <div class="card-header">
+                                <h5><i class="bi bi-download"></i> Export Options</h5>
+                            </div>
+                            <div class="card-body">
+                                <div id="exportContent">
+                                    <div class="text-center text-muted">
+                                        <i class="bi bi-download display-4"></i>
+                                        <p>No data to export. Run an evaluation to see export options.</p>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Progress Modal -->
+    <div class="modal fade" id="progressModal" tabindex="-1" data-bs-backdrop="static" data-bs-keyboard="false">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">Evaluation Progress</h5>
+                </div>
+                <div class="modal-body">
+                    <!-- Progress Tracker -->
+                    <div id="progressTracker"></div>
+                    
+                    <!-- Streaming Results -->
+                    <div class="mt-4">
+                        <div id="streamingResults"></div>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" id="cancelEvaluation">Cancel</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Bootstrap JS -->
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <!-- Custom JS -->
+    <script src="/static/assets/js/api.js?v=8"></script>
+    <script src="/static/assets/js/components/results-table.js?v=5"></script>
+    <script src="/static/assets/js/components/analytics.js?v=6"></script>
+    <script src="/static/assets/js/components/performance.js?v=7"></script>
+    <script src="/static/assets/js/components/export.js?v=4"></script>
+    <script src="/static/assets/js/components/input-methods-updated.js?v=6"></script>
+    <script src="/static/assets/js/components/streaming.js?v=4"></script>
+    <script src="/static/assets/js/components/error-handler.js?v=4"></script>
+    <script src="/static/assets/js/components/loading-states.js?v=4"></script>
+    <script src="/static/assets/js/utils/performance.js?v=4"></script>
+    <script src="/static/assets/js/main.js?v=9"></script>
+</body>
+</html>
