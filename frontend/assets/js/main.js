@@ -203,12 +203,13 @@ class BusQAApp {
         this.errorHandler = new ErrorHandler();
         this.loadingStates = new LoadingStates();
         this.performanceOptimizer = new PerformanceOptimizer();
-        this.promptSuggestions = new PromptSuggestions('promptSuggestionsContent');
+        this.promptSuggestions = new PromptSuggestionsEnhanced('promptSuggestionsContent');
         
         // Expose globally for onclick handlers
         window.errorHandler = this.errorHandler;
         window.resultsTable = this.resultsTable;
         window.promptSuggestions = this.promptSuggestions;
+        window.streamingResults = this.streamingResults;
         
         // Add event listeners
         window.addEventListener('viewDetails', (event) => {

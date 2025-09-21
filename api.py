@@ -13,7 +13,6 @@ from pydantic import BaseModel, Field
 import uvicorn
 from fastapi.middleware.cors import CORSMiddleware
 
-# Add project root to Python path
 sys.path.insert(0, str(Path(__file__).parent))
 
 from busqa.batch_evaluator import evaluate_conversations_high_speed
