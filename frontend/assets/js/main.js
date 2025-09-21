@@ -91,6 +91,15 @@ class BusQAApp {
                 this.updateInputMethod(radio.value);
             });
         });
+
+        // Tab navigation
+        document.querySelectorAll('.nav-link[data-tab]').forEach(link => {
+            link.addEventListener('click', (e) => {
+                e.preventDefault();
+                const tabName = link.getAttribute('data-tab');
+                this.switchTab(tabName);
+            });
+        });
     }
 
     /**
@@ -133,6 +142,42 @@ class BusQAApp {
 
         // Load tab-specific content
         this.loadTabContent(tabName);
+        
+        // Update tab content with current data
+        this.updateCurrentTabContent();
+    }
+
+    /**
+     * Get current active tab
+     */
+    getCurrentActiveTab() {
+        const activeLink = document.querySelector('.nav-link.active');
+        return activeLink ? activeLink.getAttribute('data-tab') : 'results';
+    }
+
+    /**
+     * Update current tab content with latest data
+     */
+    updateCurrentTabContent() {
+        const currentTab = this.getCurrentActiveTab();
+        
+        if (this.currentResults) {
+            if (currentTab === 'results' && this.resultsTable) {
+                this.resultsTable.setData(this.currentResults);
+            }
+            
+            if (currentTab === 'analytics' && this.analyticsDashboard) {
+                this.analyticsDashboard.setData({
+                    results: this.currentResults,
+                    summary: this.currentSummary,
+                    insights: this.currentSummary?.insights || []
+                });
+            }
+            
+            if (currentTab === 'export' && this.exportManager) {
+                this.exportManager.setData(this.currentResults);
+            }
+        }
     }
 
     /**
@@ -285,8 +330,11 @@ class BusQAApp {
         this.updateEvaluationUI(true);
 
         try {
-            // Show progress modal
-            this.showProgressModal();
+            // Show progress card
+            this.showProgressCard();
+
+            // Initialize results array
+            this.currentResults = [];
 
             // Start progress tracking
             this.progressTracker.start(conversations.length);
@@ -324,8 +372,11 @@ class BusQAApp {
         this.updateEvaluationUI(true);
 
         try {
-            // Show progress modal
-            this.showProgressModal();
+            // Show progress card
+            this.showProgressCard();
+
+            // Initialize results array
+            this.currentResults = [];
 
             // Start progress tracking
             this.progressTracker.start(conversations.length);
@@ -366,7 +417,7 @@ class BusQAApp {
             });
 
             // Hide progress modal
-            this.hideProgressModal();
+            this.hideProgressCard();
             this.progressTracker.stop();
             this.streamingResults.stop();
             this.performanceMonitor.stopMonitoring();
@@ -390,7 +441,7 @@ class BusQAApp {
         
         this.isEvaluating = false;
         this.updateEvaluationUI(false);
-        this.hideProgressModal();
+        this.hideProgressCard();
     }
 
     /**
@@ -441,11 +492,48 @@ class BusQAApp {
             )
         });
         
-        // Store result
+        // Store or update result
         if (!this.currentResults) {
             this.currentResults = [];
         }
-        this.currentResults.push(result);
+        
+        // Update existing result or add new one
+        const existingIndex = this.currentResults.findIndex(r => r.conversation_id === result.conversation_id);
+        if (existingIndex !== -1) {
+            // Update existing result with completed data
+            this.currentResults[existingIndex] = {
+                ...this.currentResults[existingIndex],
+                ...result,
+                status: 'completed',
+                timestamp: Date.now()
+            };
+        } else {
+            // Add new completed result
+            this.currentResults.push({
+                ...result,
+                status: 'completed',
+                timestamp: Date.now()
+            });
+        }
+        
+        // Update only the currently active tab
+        const currentTab = this.getCurrentActiveTab();
+        
+        if (currentTab === 'results' && this.resultsTable && this.currentResults) {
+            this.resultsTable.setData(this.currentResults);
+        }
+        
+        if (currentTab === 'analytics' && this.analyticsDashboard && this.currentResults) {
+            this.analyticsDashboard.setData({
+                results: this.currentResults,
+                summary: this.currentSummary,
+                insights: this.currentSummary?.insights || []
+            });
+        }
+        
+        if (currentTab === 'export' && this.exportManager && this.currentResults) {
+            this.exportManager.setData(this.currentResults);
+        }
     }
 
     /**
@@ -455,7 +543,7 @@ class BusQAApp {
         console.log('Evaluation completed');
         this.isEvaluating = false;
         this.updateEvaluationUI(false);
-        this.hideProgressModal();
+        this.hideProgressCard();
         this.showAlert('Evaluation completed successfully!', 'success');
         
         // Stop tracking and monitoring
@@ -463,15 +551,25 @@ class BusQAApp {
         this.streamingResults.stop();
         this.performanceMonitor.stopMonitoring();
         
-        // Update components with new data
+        // Update only the currently active tab
+        const currentTab = this.getCurrentActiveTab();
+        
         if (this.currentResults) {
-            this.resultsTable.setData(this.currentResults);
-            this.analyticsDashboard.setData({
-                results: this.currentResults,
-                summary: this.currentSummary,
-                insights: this.currentSummary?.insights || []
-            });
-            this.exportManager.setData(this.currentResults);
+            if (currentTab === 'results' && this.resultsTable) {
+                this.resultsTable.setData(this.currentResults);
+            }
+            
+            if (currentTab === 'analytics' && this.analyticsDashboard) {
+                this.analyticsDashboard.setData({
+                    results: this.currentResults,
+                    summary: this.currentSummary,
+                    insights: this.currentSummary?.insights || []
+                });
+            }
+            
+            if (currentTab === 'export' && this.exportManager) {
+                this.exportManager.setData(this.currentResults);
+            }
         }
     }
 
@@ -482,7 +580,7 @@ class BusQAApp {
         console.error('Evaluation error:', error);
         this.isEvaluating = false;
         this.updateEvaluationUI(false);
-        this.hideProgressModal();
+        this.hideProgressCard();
         this.showAlert(`Evaluation failed: ${error.message}`, 'danger');
     }
 
@@ -504,20 +602,22 @@ class BusQAApp {
     }
 
     /**
-     * Show progress modal
+     * Show progress card
      */
-    showProgressModal() {
-        const modal = new bootstrap.Modal(document.getElementById('progressModal'));
-        modal.show();
+    showProgressCard() {
+        const progressCard = document.getElementById('evaluationProgress');
+        if (progressCard) {
+            progressCard.style.display = 'block';
+        }
     }
 
     /**
-     * Hide progress modal
+     * Hide progress card
      */
-    hideProgressModal() {
-        const modal = bootstrap.Modal.getInstance(document.getElementById('progressModal'));
-        if (modal) {
-            modal.hide();
+    hideProgressCard() {
+        const progressCard = document.getElementById('evaluationProgress');
+        if (progressCard) {
+            progressCard.style.display = 'none';
         }
     }
 

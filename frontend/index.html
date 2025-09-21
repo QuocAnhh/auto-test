@@ -198,25 +198,21 @@
         </div>
     </div>
 
-    <!-- Progress Modal -->
-    <div class="modal fade" id="progressModal" tabindex="-1" data-bs-backdrop="static" data-bs-keyboard="false">
-        <div class="modal-dialog">
-            <div class="modal-content">
-                <div class="modal-header">
-                    <h5 class="modal-title">Evaluation Progress</h5>
-                </div>
-                <div class="modal-body">
-                    <!-- Progress Tracker -->
-                    <div id="progressTracker"></div>
-                    
-                    <!-- Streaming Results -->
-                    <div class="mt-4">
-                        <div id="streamingResults"></div>
-                    </div>
-                </div>
-                <div class="modal-footer">
-                    <button type="button" class="btn btn-secondary" id="cancelEvaluation">Cancel</button>
-                </div>
+    <!-- Real-time Evaluation Progress (replaces modal) -->
+    <div id="evaluationProgress" class="card mb-3" style="display: none;">
+        <div class="card-header d-flex justify-content-between align-items-center">
+            <h5><i class="bi bi-play-circle"></i> Evaluation in Progress</h5>
+            <button type="button" class="btn btn-sm btn-outline-danger" id="cancelEvaluation">
+                <i class="bi bi-stop-circle"></i> Cancel
+            </button>
+        </div>
+        <div class="card-body">
+            <!-- Progress Tracker -->
+            <div id="progressTracker"></div>
+            
+            <!-- Streaming Results -->
+            <div class="mt-4">
+                <div id="streamingResults"></div>
             </div>
         </div>
     </div>

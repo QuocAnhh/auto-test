@@ -423,11 +423,43 @@ class InputMethods {
                 }
                 
                 this.showAlert(`✅ Fetched ${this.conversations.length} conversations`, 'success');
+                
+                // Display conversation IDs in results table immediately
+                this.displayConversationIds();
             } else {
                 this.showAlert('❌ Failed to fetch conversations', 'error');
             }
         } catch (error) {
             this.showAlert(`Fetch error: ${error.message}`, 'error');
+        }
+    }
+
+    /**
+     * Display conversation IDs in results table
+     */
+    displayConversationIds() {
+        if (!this.conversations || this.conversations.length === 0) return;
+        
+        // Create placeholder results for conversation IDs
+        const placeholderResults = this.conversations.map(conv => ({
+            conversation_id: conv.conversation_id || conv.id || `conv-${Math.random().toString(36).substr(2, 9)}`,
+            result: {
+                detected_flow: 'Pending',
+                total_score: 0,
+                label: 'Pending',
+                confidence: 0,
+                criteria: {}
+            },
+            metrics: {
+                policy_violations: 0
+            },
+            status: 'pending',
+            timestamp: Date.now()
+        }));
+        
+        // Notify main app to update results table
+        if (window.busQAApp && window.busQAApp.resultsTable) {
+            window.busQAApp.resultsTable.setData(placeholderResults);
         }
     }
 
