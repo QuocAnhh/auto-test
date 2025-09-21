@@ -1,0 +1,48 @@
+{
+  "analysis": {
+    "overall_patterns": [
+      "Điểm trung bình tổng thể khá thấp (68.5), cho thấy prompt cần cải thiện nhiều khía cạnh. Điểm các tiêu chí về độ đầy đủ thông tin, sự đồng cảm và trải nghiệm người dùng thấp hơn các tiêu chí khác."
+    ],
+    "critical_issues": [
+      "Sự đồng cảm và trải nghiệm người dùng (empathy_experience) là vấn đề nghiêm trọng nhất, điểm chỉ đạt 60. Prompt chưa hướng dẫn chatbot thể hiện sự đồng cảm hiệu quả."
+    ],
+    "trends": [
+      "Xu hướng điểm thấp tập trung ở các tiêu chí slots_completeness (65), no_redundant_questions (70), knowledge_accuracy (70), empathy_experience (60). Điều này cho thấy chatbot chưa thu thập đủ thông tin, đôi khi hỏi lại thông tin không cần thiết, và chưa thể hiện sự đồng cảm tốt."
+    ]
+  },
+  "specific_fixes": [
+    {
+      "criterion": "empathy_experience",
+      "avg_score": "60",
+      "target_score": "80",
+      "problem_pattern": "Điểm empathy_experience thấp cho thấy chatbot chưa thể hiện sự đồng cảm và tạo trải nghiệm tích cực cho người dùng.",
+      "prompt_section": "Phần 2. Phong cách Giao tiếp và các phần hướng dẫn về sự đồng cảm trong prompt chưa đủ chi tiết và cụ thể.",
+      "line_range": [
+        30,
+        40
+      ],
+      "current_code": "| Empathy | Ghi nhận cảm xúc (bức xúc, vội vàng, lo lắng) → thấu hiểu và trấn an trước khi hỗ trợ. |",
+      "suggested_code": "| Empathy | Hãy thể hiện sự đồng cảm bằng cách ghi nhận cảm xúc của khách hàng (ví dụ: \"Em hiểu anh/chị đang rất vội/bức xúc/lo lắng...\", \"Em rất tiếc khi nghe điều đó...\"). Sau đó, hãy trấn an khách hàng trước khi hỗ trợ bằng những câu nói như: \"Đừng lo lắng, em sẽ giúp anh/chị giải quyết vấn đề này.\", \"Em sẽ cố gắng hết sức để hỗ trợ anh/chị.\". Hãy sử dụng giọng điệu nhẹ nhàng, ấm áp và thể hiện sự quan tâm chân thành. |",
+      "reasoning": "Phần hướng dẫn về sự đồng cảm hiện tại quá chung chung. Cần bổ sung các ví dụ cụ thể về cách thể hiện sự đồng cảm trong từng tình huống.",
+      "priority": "high",
+      "expected_improvement": "Cải thiện điểm empathy_experience lên khoảng 15-20 điểm"
+    },
+    {
+      "criterion": "slots_completeness",
+      "avg_score": "65",
+      "target_score": "85",
+      "problem_pattern": "Điểm slots_completeness thấp cho thấy chatbot chưa thu thập đầy đủ thông tin cần thiết.",
+      "prompt_section": "Phần 4. Quy trình Cuộc gọi Chuẩn và các luồng A, P chưa đủ rõ ràng, chi tiết các câu hỏi cần thiết để thu thập thông tin.",
+      "line_range": [
+        160,
+        200
+      ],
+      "current_code": "### 4.3 Luồng A – Đặt vé\n\n| Bước | Mục tiêu                              | Lời thoại mẫu                                                                                                       | Hướng dẫn chuyển bước        | Ghi chú                              |\n|------|----------------------------------------|---------------------------------------------------------------------------------------------------------------------|-------------------------------|--------------------------------------|\n| A1 | Ghi nhận tuyến đi | \"Anh chị muốn đi từ đâu tới đâu ạ?\"  Tuyến đi phải có đủ cả điểm đón và điểm trả. |→  A2 nếu có đủ điểm đón điểm trả phù hợp        |           |",
+      "suggested_code": "### 4.3 Luồng A – Đặt vé\n\n| Bước | Mục tiêu                              | Lời thoại mẫu                                                                                                       | Hướng dẫn chuyển bước        | Ghi chú                              |\n|------|----------------------------------------|---------------------------------------------------------------------------------------------------------------------|-------------------------------|--------------------------------------|\n| A1 | Ghi nhận tuyến đi | \"Anh/chị muốn đi từ đâu đến đâu ạ?\" (Nếu khách hàng chưa nói rõ cả điểm đi và điểm đến).  Tuyến đi phải có đủ cả điểm đón và điểm trả.  Nếu khách hàng chỉ nói một đầu, hãy hỏi thêm: \"Vậy điểm đến/điểm đi của anh/chị là đâu ạ?\" |→  A2 nếu có đủ điểm đón điểm trả phù hợp        |  Xác nhận lại thông tin sau khi khách hàng cung cấp đầy đủ |",
+      "reasoning": "Cần bổ sung các câu hỏi gợi ý để đảm bảo chatbot thu thập đủ thông tin trong mọi trường hợp.",
+      "priority": "medium",
+      "expected_improvement": "Cải thiện điểm slots_completeness lên khoảng 10-15 điểm"
+    }
+  ],
+  "summary": "Prompt cần được cải thiện đáng kể về sự đồng cảm và độ đầy đủ thông tin.  Cần bổ sung các ví dụ cụ thể về cách thể hiện sự đồng cảm, cũng như các câu hỏi gợi ý để đảm bảo chatbot thu thập đủ thông tin cần thiết.  Việc này sẽ giúp cải thiện đáng kể điểm số tổng thể và trải nghiệm người dùng."
+}

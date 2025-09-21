@@ -1,0 +1,35 @@
+{
+  "brand_id": "long_van",
+  "analysis": {
+    "analysis": {
+      "overall_patterns": [
+        "Điểm tổng thể thấp (68.5/100) - cần cải thiện toàn diện",
+        "Tiêu chí yếu nhất: empathy_experience (60/100)"
+      ],
+      "critical_issues": [],
+      "trends": [
+        "Điểm trung bình: 68.5/100 - dưới ngưỡng chấp nhận được"
+      ]
+    },
+    "specific_fixes": [
+      {
+        "criterion": "empathy_experience",
+        "avg_score": 60,
+        "target_score": 85,
+        "problem_pattern": "Empathy experience thấp (60/100) - thiếu sự đồng cảm và trải nghiệm tích cực",
+        "prompt_section": "conversation_style",
+        "line_range": [
+          1,
+          3
+        ],
+        "current_code": "## PHONG CÁCH GIAO TIẾP\n- Lịch sự, chuyên nghiệp\n- Trả lời ngắn gọn",
+        "suggested_code": "## PHONG CÁCH GIAO TIẾP\n- Lịch sự, chuyên nghiệp, thân thiện\n- Thể hiện sự đồng cảm với khách hàng\n- Sử dụng ngôn ngữ tích cực và hỗ trợ\n- Hỏi thêm về nhu cầu và mong muốn của khách\n- Đưa ra lời khuyên hữu ích",
+        "reasoning": "Dựa trên evaluation summary: empathy_experience chỉ đạt 60/100. Cần cải thiện phong cách giao tiếp để tạo trải nghiệm tích cực hơn cho khách hàng.",
+        "priority": "medium",
+        "expected_improvement": "+25 điểm empathy_experience"
+      }
+    ],
+    "summary": "Phân tích dựa trên 10 conversations. Cần cải thiện empathy_experience để tăng điểm tổng thể từ 68.5 lên 80+."
+  },
+  "timestamp": "2024-01-01T00:00:00Z"
+}

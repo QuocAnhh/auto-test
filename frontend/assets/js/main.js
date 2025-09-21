@@ -177,6 +177,14 @@ class BusQAApp {
             if (currentTab === 'export' && this.exportManager) {
                 this.exportManager.setData(this.currentResults);
             }
+            
+            if (currentTab === 'prompt-suggestions' && this.promptSuggestions) {
+                // Enable analyze button if we have results
+                const analyzeBtn = document.getElementById('analyzePromptBtn');
+                if (analyzeBtn) {
+                    analyzeBtn.disabled = false;
+                }
+            }
         }
     }
 
@@ -195,10 +203,12 @@ class BusQAApp {
         this.errorHandler = new ErrorHandler();
         this.loadingStates = new LoadingStates();
         this.performanceOptimizer = new PerformanceOptimizer();
+        this.promptSuggestions = new PromptSuggestions('promptSuggestionsContent');
         
         // Expose globally for onclick handlers
         window.errorHandler = this.errorHandler;
         window.resultsTable = this.resultsTable;
+        window.promptSuggestions = this.promptSuggestions;
         
         // Add event listeners
         window.addEventListener('viewDetails', (event) => {
@@ -210,6 +220,7 @@ class BusQAApp {
         this.performanceMonitor.init();
         this.exportManager.init();
         this.inputMethods.init();
+        this.promptSuggestions.init();
         this.progressTracker.render();
         this.streamingResults.render();
     }
@@ -230,6 +241,9 @@ class BusQAApp {
                 break;
             case 'export':
                 this.loadExportTab();
+                break;
+            case 'prompt-suggestions':
+                this.loadPromptSuggestionsTab();
                 break;
         }
     }
@@ -741,6 +755,117 @@ class BusQAApp {
         if (this.exportManager) {
             this.exportManager.render();
         }
+    }
+
+    /**
+     * Load prompt suggestions tab content
+     */
+    loadPromptSuggestionsTab() {
+        if (this.promptSuggestions) {
+            this.promptSuggestions.render();
+            
+            // Enable analyze button if we have evaluation results
+            const analyzeBtn = document.getElementById('analyzePromptBtn');
+            if (analyzeBtn && this.currentResults && this.currentResults.length > 0) {
+                analyzeBtn.disabled = false;
+                analyzeBtn.addEventListener('click', () => {
+                    this.analyzePromptSuggestions();
+                });
+            }
+        }
+    }
+
+    /**
+     * Analyze prompt suggestions
+     */
+    async analyzePromptSuggestions() {
+        if (!this.currentResults || this.currentResults.length === 0) {
+            this.showAlert('No evaluation results available for analysis', 'warning');
+            return;
+        }
+
+        const brandId = document.getElementById('brandSelect').value;
+        if (!brandId) {
+            this.showAlert('Please select a brand first', 'warning');
+            return;
+        }
+
+        try {
+            // Create evaluation summary from current results
+            const summary = this.createEvaluationSummary(this.currentResults);
+            
+            // Load prompt suggestions
+            await this.promptSuggestions.loadSuggestions(brandId, summary);
+            
+            this.showAlert('Prompt analysis completed!', 'success');
+        } catch (error) {
+            console.error('Error analyzing prompt suggestions:', error);
+            this.showAlert(`Error analyzing prompt: ${error.message}`, 'danger');
+        }
+    }
+
+    /**
+     * Create evaluation summary from results
+     */
+    createEvaluationSummary(results) {
+        const successfulResults = results.filter(r => !r.error);
+        
+        if (successfulResults.length === 0) {
+            return {
+                count: results.length,
+                successful_count: 0,
+                error_count: results.length,
+                avg_total_score: 0,
+                criteria_avg: {},
+                diagnostics_top: [],
+                flow_distribution: {},
+                policy_violation_rate: 0
+            };
+        }
+
+        // Calculate average scores
+        const totalScores = successfulResults.map(r => r.result?.total_score || 0);
+        const avgTotalScore = totalScores.reduce((a, b) => a + b, 0) / totalScores.length;
+
+        // Calculate criteria averages
+        const criteriaScores = {};
+        successfulResults.forEach(result => {
+            if (result.result?.criteria) {
+                Object.entries(result.result.criteria).forEach(([criterion, details]) => {
+                    if (!criteriaScores[criterion]) {
+                        criteriaScores[criterion] = [];
+                    }
+                    criteriaScores[criterion].push(details.score || 0);
+                });
+            }
+        });
+
+        const criteriaAvg = {};
+        Object.entries(criteriaScores).forEach(([criterion, scores]) => {
+            criteriaAvg[criterion] = scores.reduce((a, b) => a + b, 0) / scores.length;
+        });
+
+        // Flow distribution
+        const flows = successfulResults.map(r => r.result?.detected_flow || 'unknown');
+        const flowDistribution = {};
+        flows.forEach(flow => {
+            flowDistribution[flow] = (flowDistribution[flow] || 0) + 1;
+        });
+
+        // Policy violations
+        const policyViolations = successfulResults.map(r => r.metrics?.policy_violations || 0);
+        const policyViolationRate = policyViolations.filter(v => v > 0).length / policyViolations.length;
+
+        return {
+            count: results.length,
+            successful_count: successfulResults.length,
+            error_count: results.length - successfulResults.length,
+            avg_total_score: avgTotalScore,
+            criteria_avg: criteriaAvg,
+            diagnostics_top: [],
+            flow_distribution: flowDistribution,
+            policy_violation_rate: policyViolationRate
+        };
     }
 
     /**

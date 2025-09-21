@@ -49,6 +49,11 @@
                             <i class="bi bi-download"></i> Export
                         </a>
                     </li>
+                    <li class="nav-item">
+                        <a class="nav-link" href="#" data-tab="prompt-suggestions">
+                            <i class="bi bi-lightbulb"></i> Prompt Suggestions
+                        </a>
+                    </li>
                 </ul>
                 <div class="navbar-text">
                     <span class="badge bg-success" id="api-status">API Connected</span>
@@ -193,6 +198,26 @@
                             </div>
                         </div>
                     </div>
+
+                    <!-- Prompt Suggestions Tab -->
+                    <div id="prompt-suggestions-tab" class="tab-pane">
+                        <div class="card">
+                            <div class="card-header d-flex justify-content-between align-items-center">
+                                <h5><i class="bi bi-lightbulb"></i> Prompt Improvement Suggestions</h5>
+                                <button class="btn btn-primary btn-sm" id="analyzePromptBtn" disabled>
+                                    <i class="bi bi-stethoscope"></i> Analyze Prompt
+                                </button>
+                            </div>
+                            <div class="card-body">
+                                <div id="promptSuggestionsContent">
+                                    <div class="text-center text-muted">
+                                        <i class="bi bi-lightbulb display-4"></i>
+                                        <p>Run an evaluation to get prompt improvement suggestions.</p>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
                 </div>
             </div>
         </div>
@@ -229,6 +254,7 @@
     <script src="/static/assets/js/components/streaming.js?v=4"></script>
     <script src="/static/assets/js/components/error-handler.js?v=4"></script>
     <script src="/static/assets/js/components/loading-states.js?v=4"></script>
+    <script src="/static/assets/js/components/prompt-suggestions.js?v=1"></script>
     <script src="/static/assets/js/utils/performance.js?v=4"></script>
     <script src="/static/assets/js/main.js?v=9"></script>
 </body>

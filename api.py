@@ -759,6 +759,50 @@ async def run_benchmark(
         raise HTTPException(status_code=500, detail=f"An error occurred during benchmarking: {str(e)}")
 
 
+# --- Prompt Doctor API Endpoints ---
+
+class PromptAnalysisRequest(BaseModel):
+    """Request model for prompt analysis."""
+    evaluation_summary: Dict[str, Any] = Field(..., description="Evaluation summary from make_summary()")
+    brand_id: str = Field(..., description="Brand ID to analyze prompt for")
+    brand_policy: Optional[str] = Field(None, description="Optional brand policy text")
+
+@app.post("/analyze/prompt-suggestions", summary="Analyze Prompt and Get Improvement Suggestions")
+async def analyze_prompt_suggestions(request: PromptAnalysisRequest):
+    """
+    Analyzes a brand's prompt based on evaluation summary and provides specific improvement suggestions.
+    """
+    try:
+        from busqa.prompt_doctor import analyze_prompt_suggestions
+        from busqa.brand_specs import load_brand_prompt
+        
+        # Load brand prompt
+        brand_prompt_path = get_brand_prompt_path(request.brand_id)
+        brand_prompt_text, brand_policy_default = load_brand_prompt(brand_prompt_path)
+        if not brand_prompt_text:
+            raise HTTPException(status_code=404, detail=f"Brand prompt not found for brand: {request.brand_id}")
+        
+        # Use provided brand policy or load default
+        brand_policy = request.brand_policy or brand_policy_default or ""
+        
+        # Analyze prompt suggestions
+        result = await analyze_prompt_suggestions(
+            evaluation_summary=request.evaluation_summary,
+            current_prompt=brand_prompt_text,
+            brand_policy=brand_policy
+        )
+        
+        return {
+            "brand_id": request.brand_id,
+            "analysis": result,
+            "timestamp": datetime.now().isoformat()
+        }
+        
+    except HTTPException as he:
+        raise he
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"An error occurred during prompt analysis: {str(e)}")
+
 # Mount static files for frontend
 app.mount("/static", StaticFiles(directory="frontend"), name="static")
 
