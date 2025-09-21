@@ -27,11 +27,13 @@ class ResultsTable {
      * Set data and refresh table
      */
     setData(data) {
+        console.log('📊 ResultsTable.setData called with:', data ? data.length : 0, 'items');
         this.data = data;
         this.filteredData = [...data];
         this.currentPage = 1;
         this.selectedRows.clear();
         this.render();
+        console.log('✅ ResultsTable rendered');
     }
 
     /**

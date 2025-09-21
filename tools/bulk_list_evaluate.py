@@ -52,7 +52,7 @@ class FetchConfig:
     backoff_delay: float = 1.0
     timeout: int = 30
 
-def test_bearer_token(base_url: str, bearer_token: str, timeout: int = 10) -> bool:
+def test_bearer_token(base_url: str, bearer_token: str, timeout: int = 30) -> bool:
     """
     Test if bearer token is valid by making a simple API call.
     

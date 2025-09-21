@@ -380,7 +380,7 @@ class InputMethods {
     }
 
     /**
-     * Fetch bulk conversations
+     * Fetch bulk conversations with retry logic
      */
     async fetchBulkConversations() {
         const botId = document.getElementById('botId').value;
@@ -393,21 +393,48 @@ class InputMethods {
             return;
         }
 
+        // Show progress indicator (minimal delay)
+        this.showFetchProgress('Connecting...', 0);
+
         try {
-            this.showAlert('Fetching conversations...', 'info');
-            
-            const response = await fetch('/fetch-conversations', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    bot_id: botId,
-                    bearer_token: bearerToken,
-                    limit: limit,
-                    strategy: strategy
-                })
-            });
+            // Try direct fetch first for speed, fallback to retry if needed
+            let response;
+            try {
+                this.showFetchProgress('Fetching...', 50);
+                const controller = new AbortController();
+                const timeoutId = setTimeout(() => controller.abort(), 30000);
+                
+                response = await fetch('/fetch-conversations', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        bot_id: botId,
+                        bearer_token: bearerToken,
+                        limit: limit,
+                        strategy: strategy
+                    }),
+                    signal: controller.signal
+                });
+                
+                clearTimeout(timeoutId);
+            } catch (error) {
+                // If direct fetch fails, use retry logic
+                console.log('Direct fetch failed, using retry logic:', error.message);
+                response = await this.fetchWithRetry('/fetch-conversations', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        bot_id: botId,
+                        bearer_token: bearerToken,
+                        limit: limit,
+                        strategy: strategy
+                    })
+                });
+            }
 
             if (response.ok) {
+                this.showFetchProgress('Processing results...', 90);
+                
                 const result = await response.json();
                 this.conversations = result.conversations || [];
                 
@@ -422,14 +449,23 @@ class InputMethods {
                     statusDiv.classList.remove('d-none');
                 }
                 
-                this.showAlert(`✅ Fetched ${this.conversations.length} conversations`, 'success');
+                this.showFetchProgress('Complete!', 100);
+                setTimeout(() => {
+                    this.hideFetchProgress();
+                    this.showAlert(`✅ Fetched ${this.conversations.length} conversations`, 'success');
+                }, 500);
                 
                 // Display conversation IDs in results table immediately
-                this.displayConversationIds();
+                // Add small delay to ensure main app is ready
+                setTimeout(() => {
+                    this.displayConversationIds();
+                }, 100);
             } else {
+                this.hideFetchProgress();
                 this.showAlert('❌ Failed to fetch conversations', 'error');
             }
         } catch (error) {
+            this.hideFetchProgress();
             this.showAlert(`Fetch error: ${error.message}`, 'error');
         }
     }
@@ -458,8 +494,97 @@ class InputMethods {
         }));
         
         // Notify main app to update results table
+        console.log('📋 Displaying', placeholderResults.length, 'conversation IDs');
         if (window.busQAApp && window.busQAApp.resultsTable) {
             window.busQAApp.resultsTable.setData(placeholderResults);
+            console.log('✅ Results table updated with conversation IDs');
+        } else {
+            console.warn('⚠️ Main app or results table not available');
+        }
+    }
+
+    /**
+     * Fetch with retry logic (optimized for speed)
+     */
+    async fetchWithRetry(url, options, maxRetries = 2) {
+        let lastError;
+        
+        for (let attempt = 1; attempt <= maxRetries; attempt++) {
+            try {
+                this.showFetchProgress(`Attempt ${attempt}/${maxRetries}...`, (attempt - 1) / maxRetries * 100);
+                
+                const controller = new AbortController();
+                const timeoutId = setTimeout(() => controller.abort(), 30000); // 30 seconds timeout (faster)
+                
+                const response = await fetch(url, {
+                    ...options,
+                    signal: controller.signal
+                });
+                
+                clearTimeout(timeoutId);
+                
+                if (response.ok) {
+                    this.hideFetchProgress();
+                    return response;
+                } else {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+            } catch (error) {
+                lastError = error;
+                console.warn(`Fetch attempt ${attempt} failed:`, error.message);
+                
+                if (attempt < maxRetries) {
+                    const delay = attempt * 500; // Faster backoff: 500ms, 1s
+                    this.showFetchProgress(`Retrying in ${delay/1000}s... (${attempt}/${maxRetries})`, attempt / maxRetries * 100);
+                    await new Promise(resolve => setTimeout(resolve, delay));
+                }
+            }
+        }
+        
+        this.hideFetchProgress();
+        throw lastError;
+    }
+
+    /**
+     * Show fetch progress
+     */
+    showFetchProgress(message, progress) {
+        // Create or update progress indicator
+        let progressDiv = document.getElementById('fetchProgress');
+        if (!progressDiv) {
+            progressDiv = document.createElement('div');
+            progressDiv.id = 'fetchProgress';
+            progressDiv.className = 'alert alert-info d-flex align-items-center';
+            progressDiv.innerHTML = `
+                <div class="spinner-border spinner-border-sm me-2" role="status">
+                    <span class="visually-hidden">Loading...</span>
+                </div>
+                <div class="flex-grow-1">
+                    <div class="fw-bold">Fetching Conversations</div>
+                    <div class="progress mt-1" style="height: 6px;">
+                        <div class="progress-bar progress-bar-striped progress-bar-animated" 
+                             role="progressbar" style="width: 0%"></div>
+                    </div>
+                </div>
+            `;
+            this.container.appendChild(progressDiv);
+        }
+        
+        // Update message and progress
+        const messageDiv = progressDiv.querySelector('.fw-bold');
+        const progressBar = progressDiv.querySelector('.progress-bar');
+        
+        if (messageDiv) messageDiv.textContent = message;
+        if (progressBar) progressBar.style.width = `${progress}%`;
+    }
+
+    /**
+     * Hide fetch progress
+     */
+    hideFetchProgress() {
+        const progressDiv = document.getElementById('fetchProgress');
+        if (progressDiv) {
+            progressDiv.remove();
         }
     }
 

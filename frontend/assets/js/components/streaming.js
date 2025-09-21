@@ -544,6 +544,20 @@ class StreamingResults {
     }
 
     /**
+     * View details for a result
+     */
+    viewDetails(resultId) {
+        console.log('Viewing details for result:', resultId);
+        const result = this.results.find(r => r.id === resultId);
+        if (result) {
+            // Simple alert for now - can be enhanced with modal later
+            alert(`Result Details:\nID: ${result.id}\nScore: ${result.total_score || 'N/A'}\nStatus: ${result.status || 'Unknown'}`);
+        } else {
+            console.warn('Result not found:', resultId);
+        }
+    }
+
+    /**
      * Scroll to bottom
      */
     scrollToBottom() {

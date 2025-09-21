@@ -205,6 +205,12 @@ class AnalyticsDashboard {
         const ctx = document.getElementById('scoreDistributionChart');
         if (!ctx) return;
 
+        // Destroy existing chart first
+        if (this.charts.scoreDistribution) {
+            this.charts.scoreDistribution.destroy();
+            this.charts.scoreDistribution = null;
+        }
+
         // Handle different data structures
         let scores = [];
         if (this.data.results) {
@@ -258,6 +264,12 @@ class AnalyticsDashboard {
     createFlowDistributionChart() {
         const ctx = document.getElementById('flowDistributionChart');
         if (!ctx) return;
+
+        // Destroy existing chart first
+        if (this.charts.flowDistribution) {
+            this.charts.flowDistribution.destroy();
+            this.charts.flowDistribution = null;
+        }
 
         // Handle different data structures
         let flows = [];

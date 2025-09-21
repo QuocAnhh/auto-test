@@ -2,7 +2,7 @@ import json
 import requests
 from typing import Any, Dict
 
-DEFAULT_TIMEOUT = 20
+DEFAULT_TIMEOUT = 30
 
 def fetch_messages(base_url: str, conversation_id: str, headers: Dict[str, str] | None = None, timeout: int = DEFAULT_TIMEOUT) -> Any:
     """

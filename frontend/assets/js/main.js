@@ -375,8 +375,8 @@ class BusQAApp {
             // Show progress card
             this.showProgressCard();
 
-            // Initialize results array
-            this.currentResults = [];
+            // Don't reset currentResults - preserve existing data
+            // currentResults will be managed by handleEvaluationProgress
 
             // Start progress tracking
             this.progressTracker.start(conversations.length);
@@ -388,42 +388,88 @@ class BusQAApp {
                 maxConcurrency: maxConcurrency
             });
 
-            // Call bulk evaluation API with raw conversations
-            console.log('Calling evaluateBulk with raw conversations:', { conversations: conversations.length, brandId, maxConcurrency, model });
-            const result = await this.apiClient.evaluateBulkWithData(
+            // Start streaming evaluation for bulk data
+            console.log('Starting streaming evaluation for bulk conversations:', { conversations: conversations.length, brandId, maxConcurrency, model });
+            
+            const response = await this.apiClient.evaluateBulkWithDataStream(
                 conversations,
                 brandId,
                 maxConcurrency,
                 model
             );
 
-            // Handle results
-            this.currentResults = result.results || [];
-            this.currentSummary = result.summary;
+            // Process streaming response
+            const decoder = new TextDecoder();
+            let buffer = '';
+            
+            // Create reader once and reuse it
+            const reader = response.body.getReader();
 
-            // Debug: Log data structure
-            console.log('Bulk evaluation results:', this.currentResults);
-            console.log('First result structure:', this.currentResults[0]);
+            try {
+                while (true) {
+                    const { done, value } = await reader.read();
+                    
+                    if (done) break;
+                    
+                    buffer += decoder.decode(value, { stream: true });
+                    const lines = buffer.split('\n');
+                    buffer = lines.pop(); // Keep incomplete line in buffer
 
-            // Update UI components
-            this.resultsTable.setData(this.currentResults);
-            this.analyticsDashboard.setData({
-                summary: this.currentSummary,
-                results: this.currentResults
-            });
-            this.performanceMonitor.updateMetrics({
-                completedConversations: this.currentResults.length,
-                currentConcurrency: maxConcurrency
-            });
-
-            // Hide progress modal
-            this.hideProgressCard();
-            this.progressTracker.stop();
-            this.streamingResults.stop();
-            this.performanceMonitor.stopMonitoring();
-
-            // Show success message
-            this.showAlert(`Successfully evaluated ${this.currentResults.length} conversations`, 'success');
+                    for (const line of lines) {
+                        if (line.trim() === '') continue;
+                        
+                        if (line.startsWith('data: ')) {
+                            try {
+                                const data = JSON.parse(line.slice(6));
+                                console.log('📡 Raw SSE data:', data);
+                                
+                                // Handle different data types from backend
+                                if (data.type === 'result' && data.data) {
+                                    // Backend sends: {"type": "result", "data": actualResult}
+                                    this.handleEvaluationProgress(data.data);
+                                } else if (data.type === 'keepalive') {
+                                    // Keep-alive message, ignore
+                                    continue;
+                                } else if (data.type === 'summary') {
+                                    // Summary data, store for later
+                                    this.currentSummary = data.data;
+                                    continue;
+                                } else if (data.type === 'complete') {
+                                    // Evaluation complete
+                                    this.handleEvaluationComplete();
+                                    return;
+                                } else if (data.type === 'error') {
+                                    // Error occurred
+                                    this.handleEvaluationError(new Error(data.data?.error || 'Unknown error'));
+                                    return;
+                                } else {
+                                    // Direct result data (fallback)
+                                    this.handleEvaluationProgress(data);
+                                }
+                            } catch (e) {
+                                console.warn('Failed to parse SSE data:', line);
+                            }
+                        } else if (line.startsWith('event: summary')) {
+                            // Handle summary event
+                            continue;
+                        } else if (line.startsWith('event: error')) {
+                            try {
+                                const errorData = JSON.parse(line.slice(6));
+                                this.handleEvaluationError(new Error(errorData.message));
+                            } catch (e) {
+                                this.handleEvaluationError(new Error('Unknown error occurred'));
+                            }
+                            return;
+                        } else if (line.startsWith('event: end')) {
+                            this.handleEvaluationComplete();
+                            return;
+                        }
+                    }
+                }
+            } finally {
+                // Release the reader
+                reader.releaseLock();
+            }
 
         } catch (error) {
             this.handleEvaluationError(error);
@@ -472,7 +518,33 @@ class BusQAApp {
      * Handle evaluation progress
      */
     handleEvaluationProgress(result) {
-        console.log('Evaluation progress:', result);
+        console.log('🔄 Evaluation progress received:', result);
+        console.log('📊 Current results count BEFORE:', this.currentResults ? this.currentResults.length : 0);
+        
+        // Log the actual result structure
+        console.log('🔍 Result structure:', {
+            conversation_id: result.conversation_id,
+            id: result.id,
+            keys: Object.keys(result)
+        });
+        
+        // Ensure conversation_id exists (but don't generate fake ones)
+        if (!result.conversation_id) {
+            console.warn('⚠️ Result missing conversation_id, checking other fields...');
+            // Try to find conversation_id in nested data
+            if (result.data && result.data.conversation_id) {
+                result.conversation_id = result.data.conversation_id;
+                console.log('✅ Found conversation_id in result.data:', result.conversation_id);
+            } else if (result.id) {
+                result.conversation_id = result.id;
+                console.log('✅ Using result.id as conversation_id:', result.conversation_id);
+            } else {
+                console.error('❌ No conversation_id found anywhere in result!');
+                result.conversation_id = `unknown-${Date.now()}`;
+            }
+        }
+        
+        console.log('🔍 Result conversation_id:', result.conversation_id);
         
         // Update progress tracker
         this.progressTracker.update({
@@ -492,13 +564,14 @@ class BusQAApp {
             )
         });
         
-        // Store or update result
+        // Ensure currentResults exists
         if (!this.currentResults) {
             this.currentResults = [];
         }
         
-        // Update existing result or add new one
+        // Simple logic: find and update existing result, or add new one
         const existingIndex = this.currentResults.findIndex(r => r.conversation_id === result.conversation_id);
+        
         if (existingIndex !== -1) {
             // Update existing result with completed data
             this.currentResults[existingIndex] = {
@@ -516,23 +589,28 @@ class BusQAApp {
             });
         }
         
+        console.log('📊 Total results:', this.currentResults.length);
+        console.log('🎯 Updating results table with', this.currentResults.length, 'results');
+        
         // Update only the currently active tab
         const currentTab = this.getCurrentActiveTab();
+        console.log('🎯 Current active tab:', currentTab);
         
-        if (currentTab === 'results' && this.resultsTable && this.currentResults) {
+        if (currentTab === 'results' && this.resultsTable) {
             this.resultsTable.setData(this.currentResults);
-        }
-        
-        if (currentTab === 'analytics' && this.analyticsDashboard && this.currentResults) {
+            console.log('✅ Results table updated');
+        } else if (currentTab === 'analytics' && this.analyticsDashboard) {
             this.analyticsDashboard.setData({
                 results: this.currentResults,
                 summary: this.currentSummary,
                 insights: this.currentSummary?.insights || []
             });
-        }
-        
-        if (currentTab === 'export' && this.exportManager && this.currentResults) {
+            console.log('✅ Analytics dashboard updated');
+        } else if (currentTab === 'export' && this.exportManager) {
             this.exportManager.setData(this.currentResults);
+            console.log('✅ Export manager updated');
+        } else {
+            console.warn('⚠️ No component available for tab:', currentTab);
         }
     }
 
