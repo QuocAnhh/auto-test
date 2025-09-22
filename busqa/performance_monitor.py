@@ -98,9 +98,6 @@ class SystemPerformanceMonitor:
         """Update processed items count for throughput calculation"""
         self.processed_items = count
     
-    def get_current_metrics(self) -> PerformanceMetrics:
-        """Get current performance snapshot"""
-        return self._collect_metrics()
     
     def get_performance_summary(self) -> Dict[str, float]:
         """Get performance summary statistics"""
@@ -118,17 +115,6 @@ class SystemPerformanceMonitor:
             "avg_threads": sum(m.active_threads for m in recent_metrics) / len(recent_metrics)
         }
     
-    def is_system_under_pressure(self) -> bool:
-        """Check if system is under high load"""
-        if not self.metrics_history:
-            return False
-        
-        current = self.metrics_history[-1]
-        return (
-            current.cpu_percent > 80 or 
-            current.memory_percent > 85 or
-            current.memory_available_mb < 500  # Less than 500MB available
-        )
     
     def should_reduce_concurrency(self) -> bool:
         """Determine if concurrency should be reduced"""

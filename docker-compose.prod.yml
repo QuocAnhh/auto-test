@@ -1,5 +1,3 @@
-# Production-optimized configuration cho high-throughput processing
-
 version: '3.8'
 services:
   busqa:
@@ -12,7 +10,7 @@ services:
     environment:
       - PYTHONUNBUFFERED=1
       - PYTHONASYNCIODEBUG=0
-      - MALLOC_ARENA_MAX=4  # Tăng cho high concurrency
+      - MALLOC_ARENA_MAX=4  
       - PYTHONHASHSEED=0
       - REDIS_URL=redis://redis:6379/0
     deploy:
@@ -29,14 +27,11 @@ services:
       timeout: 10s
       retries: 3
       start_period: 40s
-    # Shared memory cho high concurrency
-    shm_size: 2g  # Tăng shared memory
-    # Network optimization
+    shm_size: 2g 
     sysctls:
       - net.core.somaxconn=65535
       - net.ipv4.tcp_max_syn_backlog=65535
     
-  # Redis cho caching và performance optimization
   redis:
     image: redis:7-alpine
     ports:

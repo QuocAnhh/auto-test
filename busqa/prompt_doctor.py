@@ -25,7 +25,6 @@ class PromptDoctor:
         self.llm_client = llm_client
         self.rubrics_cfg = load_unified_rubrics()
         
-        # Initialize LLM client if not provided
         if not self.llm_client:
             try:
                 from busqa.llm_client import LLMClient
@@ -100,7 +99,21 @@ Bạn là một chuyên gia phân tích và tối ưu hóa prompt cho chatbot. N
       "suggested_code": "code đề xuất sửa",
       "reasoning": "lý do dựa trên patterns trong summary",
       "priority": "high/medium/low",
-      "expected_improvement": "cải thiện dự kiến"
+      "expected_improvement": "cải thiện dự kiến",
+      "context_before": "3-5 dòng trước đoạn có vấn đề",
+      "context_after": "3-5 dòng sau đoạn có vấn đề",
+      "highlight_changes": [
+        {{
+          "type": "removed",
+          "text": "text bị xóa",
+          "line": line_number
+        }},
+        {{
+          "type": "added", 
+          "text": "text được thêm",
+          "line": line_number
+        }}
+      ]
     }}
   ],
   "summary": "tóm tắt các thay đổi cần thiết dựa trên patterns"
@@ -108,10 +121,13 @@ Bạn là một chuyên gia phân tích và tối ưu hóa prompt cho chatbot. N
 
 ## QUY TẮC QUAN TRỌNG:
 - Phân tích dựa trên patterns trong evaluation summary, không phải từng conversation riêng lẻ
-- Chỉ ra chính xác dòng/đoạn nào trong prompt cần sửa
+- Chỉ ra chính xác dòng/đoạn nào trong prompt cần sửa (line_range)
 - Đưa ra code/text thay thế cụ thể, không chỉ gợi ý chung chung
 - Ưu tiên các vấn đề có tác động lớn nhất đến điểm số
 - Đảm bảo suggestions thực tế và có thể implement được
+- Cung cấp context_before và context_after để hiểu rõ ngữ cảnh
+- Trong highlight_changes, chỉ ra chính xác text nào bị xóa/thêm và ở dòng nào
+- Đảm bảo line_range chính xác với vị trí trong prompt hiện tại
 """
     
     async def analyze_prompt_issues(self, evaluation_summary: Dict[str, Any], 
@@ -128,7 +144,6 @@ Bạn là một chuyên gia phân tích và tối ưu hóa prompt cho chatbot. N
             Dictionary containing analysis results and suggestions
         """
         try:
-            # Build analysis prompt
             analysis_prompt = self.build_analysis_prompt(evaluation_summary, current_prompt, brand_policy)
             
             # Call LLM for analysis
@@ -142,7 +157,6 @@ Bạn là một chuyên gia phân tích và tối ưu hóa prompt cho chatbot. N
                     user_prompt="Phân tích prompt và đưa ra gợi ý cải thiện dựa trên evaluation summary."
                 )
                 
-                # LLM response is already parsed JSON, just validate and return
                 if self.validate_analysis_result(llm_response):
                     return llm_response
                 else:
@@ -153,7 +167,6 @@ Bạn là một chuyên gia phân tích và tối ưu hóa prompt cho chatbot. N
                         "summary": "LLM response format is invalid"
                     }
             else:
-                # Fallback to mock analysis if no LLM client
                 return self._generate_mock_analysis(evaluation_summary, current_prompt, brand_policy)
                 
         except Exception as e:
@@ -164,45 +177,6 @@ Bạn là một chuyên gia phân tích và tối ưu hóa prompt cho chatbot. N
                 "summary": f"Analysis failed due to error: {str(e)}"
             }
     
-    def _parse_llm_response(self, llm_response: str) -> Dict[str, Any]:
-        """
-        Parse LLM response and extract analysis results.
-        
-        Args:
-            llm_response: Raw response from LLM
-            
-        Returns:
-            Parsed analysis results
-        """
-        try:
-            import json
-            import re
-            
-            # Try to extract JSON from response
-            json_match = re.search(r'\{.*\}', llm_response, re.DOTALL)
-            if json_match:
-                json_str = json_match.group()
-                result = json.loads(json_str)
-                
-                # Validate result structure
-                if self.validate_analysis_result(result):
-                    return result
-            
-            # If JSON parsing fails, return error
-            return {
-                "error": "Failed to parse LLM response",
-                "analysis": {"overall_patterns": [], "critical_issues": [], "trends": []},
-                "specific_fixes": [],
-                "summary": "LLM response could not be parsed"
-            }
-            
-        except Exception as e:
-            return {
-                "error": f"Error parsing LLM response: {str(e)}",
-                "analysis": {"overall_patterns": [], "critical_issues": [], "trends": []},
-                "specific_fixes": [],
-                "summary": "Error occurred while parsing LLM response"
-            }
 
     def _generate_mock_analysis(self, evaluation_summary: Dict[str, Any], 
                                current_prompt: str, brand_policy: str) -> Dict[str, Any]:
@@ -235,7 +209,21 @@ Bạn là một chuyên gia phân tích và tối ưu hóa prompt cho chatbot. N
                     "suggested_code": "1. Hỏi điểm đi\n2. Hỏi điểm đến\n3. Hỏi ngày đi\n4. Hỏi giờ đi (sáng/chiều/tối)\n5. Hỏi số khách\n6. Hỏi loại xe (ghế ngồi/giường nằm)",
                     "reasoning": f"Dựa trên evaluation summary: slots_completeness chỉ đạt {lowest_score}/100. Cần bổ sung thêm giờ đi và loại xe để thu thập đầy đủ thông tin.",
                     "priority": "high" if lowest_score < 60 else "medium",
-                    "expected_improvement": f"+{85 - lowest_score} điểm slots_completeness"
+                    "expected_improvement": f"+{85 - lowest_score} điểm slots_completeness",
+                    "context_before": "## FLOW ĐẶT VÉ\nKhi khách hàng muốn đặt vé, cần thu thập:",
+                    "context_after": "Sau khi có đủ thông tin, tiến hành đặt vé.\nXác nhận lại thông tin với khách hàng.",
+                    "highlight_changes": [
+                        {
+                            "type": "removed",
+                            "text": "4. Hỏi số khách",
+                            "line": 4
+                        },
+                        {
+                            "type": "added",
+                            "text": "4. Hỏi giờ đi (sáng/chiều/tối)\n5. Hỏi số khách\n6. Hỏi loại xe (ghế ngồi/giường nằm)",
+                            "line": 4
+                        }
+                    ]
                 })
             elif lowest_criterion == "knowledge_accuracy":
                 specific_fixes.append({
@@ -320,27 +308,6 @@ Bạn là một chuyên gia phân tích và tối ưu hóa prompt cho chatbot. N
             "summary": f"Phân tích dựa trên {evaluation_summary.get('successful_count', 0)} conversations. Cần cải thiện {lowest_criterion} để tăng điểm tổng thể từ {avg_total_score:.1f} lên 80+."
         }
     
-    def get_criteria_priority(self, criterion: str, avg_score: float) -> str:
-        """
-        Determine priority level based on criterion and score.
-        
-        Args:
-            criterion: Name of the criterion
-            avg_score: Average score for this criterion
-            
-        Returns:
-            Priority level: "high", "medium", or "low"
-        """
-        # Get weight from rubrics config
-        weight = self.rubrics_cfg.get("criteria", {}).get(criterion, 0.1)
-        
-        # High priority if low score and high weight
-        if avg_score < 60 and weight > 0.15:
-            return "high"
-        elif avg_score < 70 and weight > 0.1:
-            return "medium"
-        else:
-            return "low"
     
     def validate_analysis_result(self, result: Dict[str, Any]) -> Dict[str, Any]:
         """

@@ -5,13 +5,7 @@
 
 class BusQAApp {
     constructor() {
-        console.log('BusQAApp constructor called');
-        console.log('APIClient available:', typeof APIClient);
-        console.log('APIClient methods:', APIClient ? Object.getOwnPropertyNames(APIClient.prototype) : 'undefined');
-        
         this.apiClient = new APIClient();
-        console.log('APIClient instance created:', this.apiClient);
-        console.log('evaluateBulk method:', typeof this.apiClient.evaluateBulk);
         
         this.eventEmitter = new EventEmitter();
         this.currentResults = null;
@@ -19,7 +13,6 @@ class BusQAApp {
         this.isEvaluating = false;
         this.currentStream = null;
         
-        // Initialize components
         this.resultsTable = null;
         this.analyticsDashboard = null;
         this.performanceMonitor = null;
@@ -51,7 +44,6 @@ class BusQAApp {
      * Setup event listeners
      */
     setupEventListeners() {
-        // Navigation tabs
         document.querySelectorAll('[data-tab]').forEach(tab => {
             tab.addEventListener('click', (e) => {
                 e.preventDefault();
@@ -59,7 +51,6 @@ class BusQAApp {
             });
         });
 
-        // Form controls
         document.getElementById('temperature').addEventListener('input', (e) => {
             document.getElementById('tempValue').textContent = e.target.value;
         });
@@ -68,7 +59,6 @@ class BusQAApp {
             document.getElementById('concurrencyValue').textContent = e.target.value;
         });
 
-        // Action buttons
         document.getElementById('evaluateBtn').addEventListener('click', () => {
             this.startEvaluation();
         });
@@ -85,14 +75,12 @@ class BusQAApp {
             this.stopEvaluation();
         });
 
-        // Input method changes
         document.querySelectorAll('input[name="inputMethod"]').forEach(radio => {
             radio.addEventListener('change', () => {
                 this.updateInputMethod(radio.value);
             });
         });
 
-        // Tab navigation
         document.querySelectorAll('.nav-link[data-tab]').forEach(link => {
             link.addEventListener('click', (e) => {
                 e.preventDefault();
@@ -106,7 +94,6 @@ class BusQAApp {
      * Setup form controls
      */
     setupFormControls() {
-        // Initialize range values
         document.getElementById('tempValue').textContent = document.getElementById('temperature').value;
         document.getElementById('concurrencyValue').textContent = document.getElementById('maxConcurrency').value;
     }
@@ -115,12 +102,10 @@ class BusQAApp {
      * Setup tab navigation
      */
     setupTabNavigation() {
-        // Hide all tab panes
         document.querySelectorAll('.tab-pane').forEach(pane => {
             pane.classList.remove('active');
         });
 
-        // Show results tab by default
         this.switchTab('results');
     }
 
@@ -128,22 +113,18 @@ class BusQAApp {
      * Switch to specific tab
      */
     switchTab(tabName) {
-        // Update navigation
         document.querySelectorAll('.nav-link').forEach(link => {
             link.classList.remove('active');
         });
         document.querySelector(`[data-tab="${tabName}"]`).classList.add('active');
 
-        // Update content
         document.querySelectorAll('.tab-pane').forEach(pane => {
             pane.classList.remove('active');
         });
         document.getElementById(`${tabName}-tab`).classList.add('active');
 
-        // Load tab-specific content
         this.loadTabContent(tabName);
         
-        // Update tab content with current data
         this.updateCurrentTabContent();
     }
 
@@ -179,7 +160,6 @@ class BusQAApp {
             }
             
             if (currentTab === 'prompt-suggestions' && this.promptSuggestions) {
-                // Enable analyze button if we have results
                 const analyzeBtn = document.getElementById('analyzePromptBtn');
                 if (analyzeBtn) {
                     analyzeBtn.disabled = false;
@@ -205,13 +185,11 @@ class BusQAApp {
         this.performanceOptimizer = new PerformanceOptimizer();
         this.promptSuggestions = new PromptSuggestionsEnhanced('promptSuggestionsContent');
         
-        // Expose globally for onclick handlers
         window.errorHandler = this.errorHandler;
         window.resultsTable = this.resultsTable;
         window.promptSuggestions = this.promptSuggestions;
         window.streamingResults = this.streamingResults;
         
-        // Add event listeners
         window.addEventListener('viewDetails', (event) => {
             this.showDetailsModal(event.detail.conversationId, event.detail.data);
         });
@@ -297,7 +275,6 @@ class BusQAApp {
      * Update input method UI
      */
     updateInputMethod(method) {
-        // This will be implemented when we add the input components
         console.log('Input method changed to:', method);
     }
 
@@ -313,15 +290,12 @@ class BusQAApp {
             return;
         }
 
-        // Get configuration
         const maxConcurrency = parseInt(document.getElementById('maxConcurrency').value);
         const model = document.getElementById('modelSelect').value;
         const temperature = parseFloat(document.getElementById('temperature').value);
 
-        // Check if using bulk evaluation
         const inputMethod = this.inputMethods.getCurrentMethod();
         if (inputMethod === 'bulk') {
-            // Check if conversations are already fetched
             const conversations = this.inputMethods.getConversations();
             console.log('Bulk method - conversations:', conversations);
             console.log('Bulk method - conversations length:', conversations ? conversations.length : 'undefined');
@@ -334,7 +308,6 @@ class BusQAApp {
             return;
         }
 
-        // Get conversations from input methods
         const conversations = this.inputMethods.getConversations();
         if (!conversations || conversations.length === 0) {
             this.showAlert('Please provide conversation data', 'warning');
@@ -345,23 +318,18 @@ class BusQAApp {
         this.updateEvaluationUI(true);
 
         try {
-            // Show progress card
             this.showProgressCard();
 
-            // Initialize results array
             this.currentResults = [];
 
-            // Start progress tracking
             this.progressTracker.start(conversations.length);
             this.streamingResults.start();
 
-            // Start performance monitoring
             this.performanceMonitor.startMonitoring({
                 totalConversations: conversations.length,
                 maxConcurrency: maxConcurrency
             });
 
-            // Start streaming evaluation
             await this.apiClient.evaluateBatchStream(
                 conversations,
                 brandId,
@@ -376,7 +344,6 @@ class BusQAApp {
     }
 
     async startBulkEvaluationWithData(conversations, brandId, maxConcurrency, model) {
-        // Debug: Check if apiClient has evaluateBulk method
         if (!this.apiClient || typeof this.apiClient.evaluateBulk !== 'function') {
             console.error('APIClient or evaluateBulk method not available:', this.apiClient);
             this.showAlert('API Client not properly initialized', 'error');
@@ -387,24 +354,17 @@ class BusQAApp {
         this.updateEvaluationUI(true);
 
         try {
-            // Show progress card
             this.showProgressCard();
 
-            // Don't reset currentResults - preserve existing data
-            // currentResults will be managed by handleEvaluationProgress
 
-            // Start progress tracking
             this.progressTracker.start(conversations.length);
             this.streamingResults.start();
 
-            // Start performance monitoring
             this.performanceMonitor.startMonitoring({
                 totalConversations: conversations.length,
                 maxConcurrency: maxConcurrency
             });
 
-            // Start streaming evaluation for bulk data
-            console.log('Starting streaming evaluation for bulk conversations:', { conversations: conversations.length, brandId, maxConcurrency, model });
             
             const response = await this.apiClient.evaluateBulkWithDataStream(
                 conversations,
@@ -769,7 +729,12 @@ class BusQAApp {
             const analyzeBtn = document.getElementById('analyzePromptBtn');
             if (analyzeBtn && this.currentResults && this.currentResults.length > 0) {
                 analyzeBtn.disabled = false;
-                analyzeBtn.addEventListener('click', () => {
+                
+                // Remove existing event listener to prevent duplicates
+                analyzeBtn.replaceWith(analyzeBtn.cloneNode(true));
+                const newAnalyzeBtn = document.getElementById('analyzePromptBtn');
+                
+                newAnalyzeBtn.addEventListener('click', () => {
                     this.analyzePromptSuggestions();
                 });
             }
@@ -1076,19 +1041,11 @@ class BusQAApp {
 document.addEventListener('DOMContentLoaded', () => {
     // Wait for all components to be available
     const initApp = () => {
-        console.log('Checking components:', {
-            APIClient: typeof APIClient,
-            StreamingManager: typeof StreamingManager,
-            InputMethods: typeof InputMethods
-        });
-        
         if (typeof APIClient !== 'undefined' && 
             typeof StreamingManager !== 'undefined' && 
             typeof InputMethods !== 'undefined') {
-            console.log('All components loaded, initializing BusQAApp...');
             window.busQAApp = new BusQAApp();
         } else {
-            console.log('Components not ready, retrying...');
             // Retry after a short delay
             setTimeout(initApp, 100);
         }

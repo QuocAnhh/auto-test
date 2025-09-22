@@ -3,15 +3,6 @@ import gc
 from typing import List, Dict, Any
 
 
-def safe_parse_headers(raw: str) -> dict:
-    raw = (raw or "").strip()
-    if not raw:
-        return {}
-    try:
-        d = json.loads(raw)
-        return {str(k): str(v) for k, v in d.items()}
-    except Exception:
-        return {}
 
 
 
@@ -66,9 +57,6 @@ def get_memory_pressure() -> str:
     except ImportError:
         return "unknown"
 
-def chunk_conversations(conv_ids: List[str], chunk_size: int = 10) -> List[List[str]]:
-    """Chia conversations thành chunks nhỏ để xử lý"""
-    return [conv_ids[i:i + chunk_size] for i in range(0, len(conv_ids), chunk_size)]
 
 def estimate_batch_time(num_conversations: int, concurrency: int) -> float:
     """Ước tính thời gian batch processing"""

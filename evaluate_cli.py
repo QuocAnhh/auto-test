@@ -13,7 +13,6 @@ from pathlib import Path
 import logging
 from typing import List, Dict, Any
 
-# Add project root to path
 project_root = Path(__file__).parent
 sys.path.insert(0, str(project_root))
 
@@ -22,17 +21,13 @@ from busqa.brand_specs import load_brand_prompt
 from busqa.aggregate import make_summary, generate_insights
 from busqa.utils import cleanup_memory, estimate_batch_time
 
-# Setup logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
-
-
 
 def parse_conversation_ids(args) -> List[str]:
     """Parse conversation IDs from command line arguments."""
     conversation_ids = []
     
-    # From --conversation-id (single, for backward compatibility)
     if hasattr(args, 'conversation_id') and args.conversation_id:
         conversation_ids.append(args.conversation_id.strip())
     
@@ -50,7 +45,6 @@ def parse_conversation_ids(args) -> List[str]:
         except Exception as e:
             logger.error(f"Error reading conversations file: {e}")
     
-    # Remove duplicates while preserving order
     seen = set()
     unique_ids = []
     for id in conversation_ids:
@@ -58,7 +52,6 @@ def parse_conversation_ids(args) -> List[str]:
             seen.add(id)
             unique_ids.append(id)
     
-    # Show warning for very large batches
     if len(unique_ids) > 100:
         logger.warning(f"Large batch detected: {len(unique_ids)} conversations. This may take significant time and resources.")
     
@@ -67,10 +60,8 @@ def parse_conversation_ids(args) -> List[str]:
 def main():
     parser = argparse.ArgumentParser(description="Evaluate bus QA conversations using Unified Rubric System")
     
-    # Single conversation (backward compatibility)
     parser.add_argument("--conversation-id", help="Single conversation ID to evaluate")
     
-    # Batch conversations (new)
     parser.add_argument("--conversation-ids", help="Comma-separated conversation IDs (e.g., 'id1,id2,id3')")
     parser.add_argument("--conversations-file", help="Path to file with conversation IDs (one per line)")
     
@@ -100,12 +91,10 @@ def main():
     parser.add_argument("--apply-diagnostics", action="store_true", default=True, help="Apply diagnostic penalties (default: True)")
     parser.add_argument("--no-diagnostics", action="store_true", help="Disable diagnostic penalties")
     
-    # Debug
     parser.add_argument("--verbose", "-v", action="store_true", help="Verbose output")
     
     args = parser.parse_args()
     
-    # Validate brand mode arguments
     if args.brand_mode == "single" and not args.brand_prompt_path:
         print("✗ --brand-prompt-path is required when using --brand-mode=single")
         sys.exit(1)
@@ -203,7 +192,6 @@ def main():
     
 
     
-    # Batch evaluation - sử dụng high-speed evaluator cho cả single và batch
     try:
         from busqa.batch_evaluator import evaluate_conversations_high_speed
         
@@ -223,7 +211,6 @@ def main():
                 json.dump(results, f, ensure_ascii=False, indent=2)
             print(f"✓ Batch results saved to {args.output}")
         
-        # Clean up memory sau khi save
         cleanup_memory()
         
         # Tạo summary nhanh

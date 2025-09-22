@@ -33,28 +33,28 @@ logger = logging.getLogger(__name__)
 @dataclass
 class BatchConfig:
     """Config cho batch evaluation tối ưu với progressive batching"""
-    max_concurrency: int = 3   # Giảm xuống để tránh timeout
-    adaptive_batching: bool = True  # Enable adaptive progressive batching
-    initial_batch_size: int = 8    # Start với batch nhỏ để test latency
-    progressive_multiplier: float = 1.5  # Tăng batch size dần dần
-    max_batch_size: int = 20       # Max batch size để control memory
-    llm_timeout: float = 60.0      # Tăng timeout để tránh timeout
-    memory_cleanup_interval: int = 8   # Cleanup thường xuyên hơn
+    max_concurrency: int = 3  
+    adaptive_batching: bool = True
+    initial_batch_size: int = 8
+    progressive_multiplier: float = 1.5
+    max_batch_size: int = 20
+    llm_timeout: float = 60.0
+    memory_cleanup_interval: int = 8
     progress_callback: Optional[callable] = None
-    stream_callback: Optional[callable] = None  # Callback để stream kết quả
-    use_high_performance_api: bool = True  # Enable connection pooling
-    redis_url: Optional[str] = None  # Redis URL for caching
-    api_rate_limit: int = 100  # API calls per second
+    stream_callback: Optional[callable] = None
+    use_high_performance_api: bool = True
+    redis_url: Optional[str] = None
+    api_rate_limit: int = 100
 
 class HighSpeedBatchEvaluator:
     """Batch evaluator tối ưu cho conversations song song với multi-brand support"""
     
     def __init__(self, config: BatchConfig = None):
         self.config = config or BatchConfig()
-        self.system_prompt_cache = {}  # Cache system prompts theo brand
+        self.system_prompt_cache = {}
         self.processed_count = 0
-        self.brand_stats = {}  # Thống kê theo brand
-        self.api_client = None  # High-performance API client
+        self.brand_stats = {}
+        self.api_client = None
         
     async def evaluate_batch(
         self, 
@@ -71,28 +71,24 @@ class HighSpeedBatchEvaluator:
         diagnostics_cfg: dict = None,
         brand_resolver: BrandResolver = None
     ) -> List[Dict[str, Any]]:
-        """Main entry point - chấm điểm batch với tốc độ cao, hỗ trợ multi-brand"""
+        """Main entry point"""
         
         self.processed_count = 0
         self.brand_stats = {}
         start_time = time.time()
         total_count = len(conversation_ids)
         
-        # Start performance monitoring
         perf_monitor = get_performance_monitor()
         await perf_monitor.start_monitoring()
         
-        # Determine mode
         is_multi_brand = brand_resolver is not None
         mode_str = "multi-brand" if is_multi_brand else "single-brand"
         
-        # Adaptive concurrency based on system resources
         memory_pressure = get_memory_pressure()
         if memory_pressure in ["high", "critical"]:
             original_concurrency = self.config.max_concurrency
             self.config.max_concurrency = max(5, self.config.max_concurrency // 2)
         
-        # Pre-build system prompt để cache (chỉ cho single-brand mode)
         if not is_multi_brand:
             system_prompt_key = self._get_system_prompt_key(brand_policy, brand_prompt_text)
             if system_prompt_key not in self.system_prompt_cache:
@@ -100,21 +96,18 @@ class HighSpeedBatchEvaluator:
                     rubrics_cfg, brand_policy, brand_prompt_text
                 )
         
-        # Initialize high-performance API client if enabled
         if self.config.use_high_performance_api:
             api_config = APIClientConfig(
                 max_connections=min(self.config.max_concurrency * 2, 200),
                 rate_limit_per_second=self.config.api_rate_limit,
                 enable_caching=self.config.redis_url is not None
             )
-            # Initialize in __aenter__ via async context manager
             self.api_client = HighPerformanceAPIClient(
                 base_url=base_url,
                 config=api_config,
                 redis_url=self.config.redis_url
             )
         
-        # Process tất cả conversations song song với global concurrency control
         
         try:
             if self.api_client:
@@ -136,11 +129,9 @@ class HighSpeedBatchEvaluator:
         elapsed = time.time() - start_time
         success_count = len([r for r in all_results if "error" not in r])
         
-        # Stop performance monitoring and get summary
         perf_monitor.stop_monitoring()
         perf_summary = perf_monitor.get_performance_summary()
         
-        # Performance metrics available but not logged to reduce noise
         
         return all_results
     
@@ -159,20 +150,18 @@ class HighSpeedBatchEvaluator:
         diagnostics_cfg: dict,
         brand_resolver: BrandResolver = None
     ) -> List[Dict[str, Any]]:
-        """Progressive batching để tránh convoy effect và resource starvation"""
+        """Progressive batching"""
         
         total_count = len(conversation_ids)
         all_results = []
         
         if self.config.adaptive_batching and total_count > 15:
-            # Use progressive batching for large batches
             return await self._process_progressive_batches(
                 conversation_ids, base_url, rubrics_cfg, brand_policy, brand_prompt_text,
                 llm_api_key, llm_model, temperature, llm_base_url,
                 apply_diagnostics, diagnostics_cfg, brand_resolver
             )
         else:
-            # Fallback to original method for small batches
             return await self._process_standard_batch(
                 conversation_ids, base_url, rubrics_cfg, brand_policy, brand_prompt_text,
                 llm_api_key, llm_model, temperature, llm_base_url,
@@ -194,24 +183,20 @@ class HighSpeedBatchEvaluator:
         diagnostics_cfg: dict,
         brand_resolver: BrandResolver = None
     ) -> List[Dict[str, Any]]:
-        """Progressive batching: Start nhỏ, tăng dần based on performance"""
+        """Progressive batching"""
         
         all_results = []
         remaining_ids = conversation_ids.copy()
         current_batch_size = self.config.initial_batch_size
         batch_num = 1
         
-        # Starting progressive batching
         
         while remaining_ids:
-            # Get next batch
             batch_ids = remaining_ids[:current_batch_size]
             remaining_ids = remaining_ids[current_batch_size:]
             
             batch_start_time = time.time()
-            # Processing batch
             
-            # Process batch with controlled concurrency
             semaphore = asyncio.Semaphore(min(len(batch_ids), self.config.max_concurrency))
             batch_results = await self._process_batch_with_semaphore(
                 batch_ids, semaphore, base_url, rubrics_cfg, brand_policy, brand_prompt_text,
@@ -223,32 +208,25 @@ class HighSpeedBatchEvaluator:
             batch_throughput = len(batch_ids) / batch_elapsed if batch_elapsed > 0 else 0
             successful_in_batch = len([r for r in batch_results if "error" not in r])
             
-            # Batch completed
             
             all_results.extend(batch_results)
             
-            # Adaptive batch size adjustment based on performance
-            if remaining_ids:  # Only adjust if more batches to come
+            if remaining_ids:
                 if batch_throughput > 1.0 and current_batch_size < self.config.max_batch_size:
-                    # Performance is good, increase batch size
                     new_batch_size = min(
                         int(current_batch_size * self.config.progressive_multiplier),
                         self.config.max_batch_size,
-                        len(remaining_ids)  # Don't exceed remaining
+                        len(remaining_ids)
                     )
                     if new_batch_size > current_batch_size:
-                        # Increasing batch size for better performance
                         current_batch_size = new_batch_size
                 elif batch_throughput < 0.5 and current_batch_size > self.config.initial_batch_size:
-                    # Performance is poor, decrease batch size
                     new_batch_size = max(
                         int(current_batch_size / self.config.progressive_multiplier),
                         self.config.initial_batch_size
                     )
-                    # Decreasing batch size due to poor performance
                     current_batch_size = new_batch_size
                 
-                # Small delay between batches to prevent resource exhaustion
                 if len(remaining_ids) > 0:
                     await asyncio.sleep(0.5)
             
@@ -272,13 +250,12 @@ class HighSpeedBatchEvaluator:
         diagnostics_cfg: dict,
         brand_resolver: BrandResolver = None
     ) -> List[Dict[str, Any]]:
-        """Process a single batch with semaphore control"""
+        """Process a single batch with semaphore"""
         
         total_count = getattr(self, 'total_conversations', len(batch_ids))
 
         async def process_single(conv_id: str) -> Dict[str, Any]:
             async with semaphore:
-                # Process conversation
                 
                 try:
                     start_time = time.time()
@@ -293,10 +270,8 @@ class HighSpeedBatchEvaluator:
                     )
                     elapsed = time.time() - start_time
                     
-                    # Update progress
                     self.processed_count += 1
                     
-                    # Update performance monitor
                     perf_monitor = get_performance_monitor()
                     perf_monitor.update_processed_count(self.processed_count)
                     
@@ -304,7 +279,7 @@ class HighSpeedBatchEvaluator:
                         progress = self.processed_count / getattr(self, 'total_conversations', len(batch_ids))
                         self.config.progress_callback(progress, self.processed_count, getattr(self, 'total_conversations', len(batch_ids)))
                     
-                    # STREAMING: Gọi callback ngay khi có kết quả
+                    # streaming result
                     if self.config.stream_callback:
                         self.config.stream_callback(result)
                     
@@ -331,7 +306,7 @@ class HighSpeedBatchEvaluator:
                         self.config.stream_callback(result)
                     return result
         
-        # Process batch conversations
+        # process batch conversations
         tasks = [process_single(conv_id) for conv_id in batch_ids]
         results = await asyncio.gather(*tasks, return_exceptions=False)
         
@@ -354,14 +329,14 @@ class HighSpeedBatchEvaluator:
     ) -> List[Dict[str, Any]]:
         """Fallback standard batch processing for small batches"""
         
-        # Global semaphore cho tất cả conversations
+        # global semaphore for all conversations
         semaphore = asyncio.Semaphore(self.config.max_concurrency)
         total_count = len(conversation_ids)
         self.total_conversations = total_count  # Store for progress calculation
 
         async def process_single(conv_id: str) -> Dict[str, Any]:
             async with semaphore:
-                # Process conversation (standard batch)
+                # process conversation 
                 
                 try:
                     start_time = time.time()
@@ -376,10 +351,10 @@ class HighSpeedBatchEvaluator:
                     )
                     elapsed = time.time() - start_time
                     
-                    # Update progress
+                    # update progress
                     self.processed_count += 1
                     
-                    # Update performance monitor
+                    # update performance monitor
                     perf_monitor = get_performance_monitor()
                     perf_monitor.update_processed_count(self.processed_count)
                     
@@ -387,17 +362,17 @@ class HighSpeedBatchEvaluator:
                         progress = self.processed_count / total_count
                         self.config.progress_callback(progress, self.processed_count, total_count)
                     
-                    # STREAMING: Gọi callback ngay khi có kết quả
+                    # streaming result
                     if self.config.stream_callback:
                         self.config.stream_callback(result)
 
-                    # Log concurrent activity mỗi 10 conversations
+                    # log concurrent activity every 10 conversations
                     # Cleanup memory định kỳ và adaptive concurrency
                     if self.processed_count % self.config.memory_cleanup_interval == 0:
                         collected = cleanup_memory()
                         mem_info = monitor_memory_usage()
                         
-                        # Adaptive concurrency based on system pressure
+                        # adaptive concurrency based on system pressure
                         perf_monitor = get_performance_monitor()
                         if perf_monitor.should_reduce_concurrency():
                             # Dynamic adjustment would require more complex implementation
@@ -615,20 +590,20 @@ async def evaluate_conversations_high_speed(
     llm_base_url: str = None,
     apply_diagnostics: bool = True,
     diagnostics_cfg: dict = None,
-    max_concurrency: int = 30,  # Giảm xuống 30 để work with progressive batching
+    max_concurrency: int = 30,  
     progress_callback: callable = None,
-    stream_callback: callable = None, # Thêm stream_callback
+    stream_callback: callable = None,   
     brand_resolver: BrandResolver = None,
-    use_high_performance_api: bool = True,  # Enable connection pooling by default
-    redis_url: str = None,  # Redis URL for caching
-    api_rate_limit: int = 200,  # API rate limit
-    use_progressive_batching: bool = True  # Enable progressive batching to fix convoy effect
+    use_high_performance_api: bool = True,  
+    redis_url: str = None,  
+    api_rate_limit: int = 200,  
+    use_progressive_batching: bool = True  
 ) -> List[Dict[str, Any]]:
     """High-level API cho batch evaluation nhanh"""
     
     config = BatchConfig(
         max_concurrency=max_concurrency,
-        adaptive_batching=use_progressive_batching,  # Use parameter to control progressive batching
+        adaptive_batching=use_progressive_batching,  
         progress_callback=progress_callback,
         stream_callback=stream_callback,
         use_high_performance_api=use_high_performance_api,

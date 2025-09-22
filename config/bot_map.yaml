@@ -1,5 +1,5 @@
 defaults:
-  fallback_brand: "son_hai"   # dùng khi bot_id không map được
+  fallback_brand: "son_hai"
   brands_dir: "brands"
 
 bots:
@@ -9,7 +9,3 @@ bots:
   "5157":
     brand_id: "long_van"
     prompt_path: "brands/long_van/prompt.md"
-  # Thêm các bot_id khác tại đây theo format:
-  # "bot_id_string":
-  #   brand_id: "brand_name"
-  #   prompt_path: "brands/brand_name/prompt.md"  # optional, sẽ dùng brands_dir/<brand_id>/prompt.md nếu không có

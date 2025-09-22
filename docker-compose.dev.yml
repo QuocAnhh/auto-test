@@ -27,7 +27,6 @@ services:
       retries: 3
       start_period: 40s
 
-  # Optional: Redis for caching (if needed)
   redis:
     image: redis:7-alpine
     ports:

@@ -2,7 +2,7 @@
 
 Hệ thống đánh giá chất lượng hội thoại chatbot/tổng đài tự động sử dụng LLM (Large Language Model) cho ngành vận tải hành khách.
 
-**🚀 Giao diện hiện đại**: Đã chuyển từ Streamlit sang Flask web app với HTML/CSS/JS hiện đại, responsive, và user-friendly.
+**🚀 Giao diện hiện đại**: FastAPI web app với HTML/CSS/JS hiện đại, responsive, và user-friendly.
 
 ## 🚀 Cách chạy ứng dụng
 
@@ -22,7 +22,7 @@ Hệ thống đánh giá chất lượng hội thoại chatbot/tổng đài tự
 ./docker_stop.sh clean
 ```
 
-Ứng dụng sẽ chạy tại: **http://localhost:5000**
+Ứng dụng sẽ chạy tại: **http://localhost:8000**
 
 ### Chạy trực tiếp (không Docker)
 
@@ -30,10 +30,8 @@ Hệ thống đánh giá chất lượng hội thoại chatbot/tổng đài tự
 # Cài đặt dependencies
 pip install -r requirements.txt
 
-# Chạy Flask app
-python run_webapp.py
-# hoặc
-./run_webapp.sh
+# Chạy FastAPI app
+python api.py
 ```
 
 ## Tổng quan
@@ -107,9 +105,9 @@ BEARER_TOKEN=your_bearer_token
 
 ### Chạy ứng dụng:
 
-1. **Streamlit Web App** (khuyến nghị):
+1. **FastAPI Web App** (khuyến nghị):
 ```bash
-streamlit run app.py
+python api.py
 ```
 
 2. **CLI đánh giá đơn lẻ**:
@@ -135,7 +133,7 @@ docker-compose up
 ## Cấu trúc thư mục
 
 ```
-├── app.py                 # Streamlit web interface chính
+├── api.py                 # FastAPI web interface chính
 ├── evaluate_cli.py        # CLI evaluation tool
 ├── busqa/                 # Core evaluation modules
 │   ├── api_client.py      # API calls

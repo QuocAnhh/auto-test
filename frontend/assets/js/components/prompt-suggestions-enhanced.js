@@ -102,6 +102,81 @@ class PromptSuggestionsEnhanced {
                 box-shadow: 0 0 0 0.2rem rgba(25, 135, 84, 0.25);
             }
             
+            .code-line {
+                display: flex;
+                align-items: center;
+                padding: 0.25rem 0;
+                font-family: 'Courier New', monospace;
+                font-size: 0.875rem;
+                line-height: 1.4;
+            }
+            
+            .line-number {
+                display: inline-block;
+                width: 3rem;
+                text-align: right;
+                margin-right: 1rem;
+                color: #6c757d;
+                font-size: 0.75rem;
+                background-color: #f8f9fa;
+                padding: 0.25rem 0.5rem;
+                border-radius: 0.25rem;
+            }
+            
+            .line-content {
+                flex: 1;
+                padding: 0.25rem 0.5rem;
+                border-radius: 0.25rem;
+            }
+            
+            .highlight-removed .line-content {
+                background-color: #f8d7da;
+                color: #721c24;
+                border-left: 3px solid #dc3545;
+            }
+            
+            .highlight-added .line-content {
+                background-color: #d1edff;
+                color: #0c5460;
+                border-left: 3px solid #0d6efd;
+            }
+            
+            .change-item {
+                margin-bottom: 0.5rem;
+                padding: 0.5rem;
+                border-radius: 0.375rem;
+                border-left: 4px solid;
+            }
+            
+            .change-item.removed {
+                background-color: #f8d7da;
+                border-left-color: #dc3545;
+            }
+            
+            .change-item.added {
+                background-color: #d1edff;
+                border-left-color: #0d6efd;
+            }
+            
+            .change-type {
+                font-weight: bold;
+                margin-right: 0.5rem;
+            }
+            
+            .change-line {
+                color: #6c757d;
+                font-size: 0.875rem;
+                margin-right: 0.5rem;
+            }
+            
+            .change-content {
+                margin: 0.25rem 0 0 0;
+                font-size: 0.875rem;
+                background-color: rgba(255, 255, 255, 0.7);
+                padding: 0.25rem 0.5rem;
+                border-radius: 0.25rem;
+            }
+            
             .comparison-grid {
                 display: grid;
                 grid-template-columns: 1fr 1fr;
@@ -255,18 +330,22 @@ class PromptSuggestionsEnhanced {
                         <strong><i class="bi bi-exclamation-triangle"></i> Problem:</strong> ${fix.problem_pattern}
                     </div>
                     
-                    <!-- Enhanced Code Comparison -->
+                    <!-- Enhanced Code Comparison with Line Numbers -->
                     <div class="comparison-grid">
                         <div class="current-code">
-                            <h6><i class="bi bi-x-circle text-danger"></i> Current Code</h6>
+                            <h6><i class="bi bi-x-circle text-danger"></i> Current Code 
+                                <small class="text-muted">(Dòng ${fix.line_range ? fix.line_range[0] : 'N/A'}-${fix.line_range ? fix.line_range[1] : 'N/A'})</small>
+                            </h6>
                             <div class="code-container">
-                                <pre class="bg-danger bg-opacity-10 p-3 rounded"><code>${this.escapeHtml(fix.current_code)}</code></pre>
+                                <pre class="bg-danger bg-opacity-10 p-3 rounded"><code>${this.renderCodeWithLineNumbers(fix.current_code, fix.line_range, 'current')}</code></pre>
                             </div>
                         </div>
                         <div class="suggested-code">
-                            <h6><i class="bi bi-check-circle text-success"></i> Suggested Code</h6>
+                            <h6><i class="bi bi-check-circle text-success"></i> Suggested Code 
+                                <small class="text-muted">(Cải thiện)</small>
+                            </h6>
                             <div class="code-container suggested-code">
-                                <pre class="bg-success bg-opacity-10 p-3 rounded"><code>${this.escapeHtml(fix.suggested_code)}</code></pre>
+                                <pre class="bg-success bg-opacity-10 p-3 rounded"><code>${this.renderCodeWithLineNumbers(fix.suggested_code, fix.line_range, 'suggested')}</code></pre>
                             </div>
                         </div>
                     </div>
@@ -291,6 +370,35 @@ class PromptSuggestionsEnhanced {
                         <p class="text-muted bg-light p-3 rounded">${fix.reasoning}</p>
                     </div>
                     
+                    ${fix.context_before ? `
+                    <div class="mt-3">
+                        <h6><i class="bi bi-arrow-up"></i> Context Trước</h6>
+                        <pre class="bg-light p-2 rounded small">${this.escapeHtml(fix.context_before)}</pre>
+                    </div>
+                    ` : ''}
+                    
+                    ${fix.context_after ? `
+                    <div class="mt-3">
+                        <h6><i class="bi bi-arrow-down"></i> Context Sau</h6>
+                        <pre class="bg-light p-2 rounded small">${this.escapeHtml(fix.context_after)}</pre>
+                    </div>
+                    ` : ''}
+                    
+                    ${fix.highlight_changes && fix.highlight_changes.length > 0 ? `
+                    <div class="mt-3">
+                        <h6><i class="bi bi-highlighter"></i> Chi tiết thay đổi</h6>
+                        <div class="highlight-changes">
+                            ${fix.highlight_changes.map(change => `
+                                <div class="change-item ${change.type}">
+                                    <span class="change-type">${change.type === 'removed' ? '❌ Xóa' : '✅ Thêm'}</span>
+                                    <span class="change-line">Dòng ${change.line}</span>
+                                    <pre class="change-content">${this.escapeHtml(change.text)}</pre>
+                                </div>
+                            `).join('')}
+                        </div>
+                    </div>
+                    ` : ''}
+                    
                     <div class="mt-3 d-flex gap-2 flex-wrap">
                         <button class="btn btn-outline-primary btn-sm" onclick="promptSuggestions.showDiffModal(${index})">
                             <i class="bi bi-arrow-left-right"></i> Full Diff
@@ -308,6 +416,24 @@ class PromptSuggestionsEnhanced {
                 </div>
             </div>
         `;
+    }
+
+    /**
+     * Render code with line numbers and highlighting
+     */
+    renderCodeWithLineNumbers(code, lineRange, type) {
+        const lines = code.split('\n');
+        const startLine = lineRange ? lineRange[0] : 1;
+        
+        return lines.map((line, index) => {
+            const lineNumber = startLine + index;
+            const isHighlighted = type === 'current' ? 'highlight-removed' : 'highlight-added';
+            
+            return `<div class="code-line ${isHighlighted}">
+                <span class="line-number">${lineNumber}</span>
+                <span class="line-content">${this.escapeHtml(line)}</span>
+            </div>`;
+        }).join('');
     }
 
     /**

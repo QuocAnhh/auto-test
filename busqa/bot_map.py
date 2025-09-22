@@ -40,7 +40,7 @@ class BotMap:
         Raises:
             ValueError: Khi không thể resolve được brand cho bot_id
         """
-        # Thử resolve từ mapping trước
+        # thử resolve từ mapping trước
         if bot_id and bot_id in self._bots:
             entry = self._bots[bot_id] or {}
             brand_id = entry.get("brand_id")
@@ -53,13 +53,12 @@ class BotMap:
             if brand_id and prompt_path:
                 return brand_id, prompt_path
 
-        # Fallback to default brand
+        # fallback
         if self._fallback_brand:
             brand_id = self._fallback_brand
             prompt_path = os.path.join(self._brands_dir, brand_id, "prompt.md")
             return brand_id, prompt_path
 
-        # Không thể resolve
         raise ValueError(f"Cannot resolve brand for bot_id={bot_id!r} and no fallback_brand configured")
     
     def get_all_mapped_bots(self) -> Dict[str, str]:

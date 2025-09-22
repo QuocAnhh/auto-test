@@ -51,6 +51,7 @@ class FetchConfig:
     retry_count: int = 3
     backoff_delay: float = 1.0
     timeout: int = 30
+    limit: int = None  # Optional limit to stop fetching when reached
 
 def test_bearer_token(base_url: str, bearer_token: str, timeout: int = 30) -> bool:
     """
@@ -102,6 +103,11 @@ def fetch_conversations_with_messages(config: FetchConfig) -> List[Dict[str, Any
     }
     
     for page in range(1, config.max_pages + 1):
+        # Check if we already have enough conversations
+        if hasattr(config, 'limit') and config.limit and len(all_conversations) >= config.limit:
+            logger.info(f"Already have {len(all_conversations)} conversations, stopping fetch.")
+            break
+            
         url = f"{config.base_url.rstrip('/')}/api/conversations"
         params = {
             "bot_id": config.bot_id,
@@ -157,6 +163,11 @@ def fetch_conversations_with_messages(config: FetchConfig) -> List[Dict[str, Any
                 
                 all_conversations.extend(conversations)
                 logger.info(f"Page {page}: Got {len(conversations)} conversations (total: {len(all_conversations)})")
+                
+                # Check if we have enough conversations
+                if hasattr(config, 'limit') and config.limit and len(all_conversations) >= config.limit:
+                    logger.info(f"Reached limit of {config.limit} conversations, stopping fetch.")
+                    break
                 
                 # Check if there are more pages
                 if len(conversations) < config.page_size:

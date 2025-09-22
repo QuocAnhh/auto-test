@@ -16,35 +16,28 @@ from fastapi.middleware.cors import CORSMiddleware
 sys.path.insert(0, str(Path(__file__).parent))
 
 from busqa.batch_evaluator import evaluate_conversations_high_speed
-from tools.bulk_list_evaluate import evaluate_conversation_from_raw
+from tools.bulk_list_evaluate import evaluate_conversation_from_raw, fetch_conversations_with_messages, select_conversations, FetchConfig
 from busqa.models import Conversation as BusQAConversation
 from busqa.llm_client import LLMClient
 from busqa.prompt_loader import load_unified_rubrics, load_diagnostics_config
 from busqa.brand_specs import load_brand_prompt, get_available_brands, get_brand_prompt_path
 from busqa.brand_resolver import BrandResolver
 from busqa.aggregate import make_summary, generate_insights
-from tools.bulk_list_evaluate import fetch_conversations_with_messages, select_conversations, FetchConfig
-from busqa.batch_evaluator import evaluate_conversations_high_speed
-# from benchmark_performance import benchmark_batch_processing
 
-# --- FastAPI App Initialization ---
 app = FastAPI(
     title="BusQA LLM API",
     description="API for the Bus Quality Assurance LLM evaluation system.",
     version="1.0.0",
 )
 
-# --- CORS Middleware ---
-# This is useful for local development if you run the frontend outside of Docker
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Allows all origins
+    allow_origins=["*"],
     allow_credentials=True,
-    allow_methods=["*"],  # Allows all methods
-    allow_headers=["*"],  # Allows all headers
+    allow_methods=["*"],
+    allow_headers=["*"]
 )
 
-# --- Global Clients and Configs (Load once on startup) ---
 try:
     rubrics_cfg = load_unified_rubrics()
     diagnostics_cfg = load_diagnostics_config()
@@ -53,11 +46,9 @@ try:
     available_brands = get_available_brands()
 except Exception as e:
     print(f"FATAL: Could not load initial configurations. {e}")
-    # In a real app, you might want to exit or have a fallback.
     rubrics_cfg = diagnostics_cfg = brand_resolver = llm_client = available_brands = None
 
 
-# --- Pydantic Models for API I/O ---
 class Message(BaseModel):
     role: str
     content: str
@@ -104,9 +95,6 @@ class BulkListRequest(BaseModel):
     )
     bearer_token: str = Field(..., description="Bearer token for the external API.")
 
-
-# --- API Endpoints ---
-
 @app.on_event("startup")
 async def startup_event():
     if not all([rubrics_cfg, diagnostics_cfg, brand_resolver, llm_client, available_brands]):
@@ -138,7 +126,6 @@ async def evaluate_single(request: SingleEvaluationRequest):
     Evaluates a single conversation against the specified brand's policies.
     """
     try:
-        # Validate conversation data
         if not request.conversation.messages:
             raise HTTPException(status_code=400, detail="Conversation must have at least one message.")
         
@@ -157,7 +144,6 @@ async def evaluate_single(request: SingleEvaluationRequest):
         if not brand_prompt_path:
             raise HTTPException(status_code=404, detail=f"Brand '{brand_id}' not found.")
 
-        # evaluate_conversation_from_raw is a sync function, run in a thread
         result = await asyncio.to_thread(
             evaluate_conversation_from_raw,
             raw_conv=conversation_data,
@@ -177,22 +163,18 @@ async def evaluate_batch_conversations(request: BatchEvaluationRequest):
     Evaluates a batch of conversations concurrently for high throughput.
     """
     try:
-        # Validate input
         if not request.conversations:
             raise HTTPException(status_code=400, detail="At least one conversation is required.")
         
         if request.max_concurrency < 1 or request.max_concurrency > 50:
             raise HTTPException(status_code=400, detail="max_concurrency must be between 1 and 50.")
         
-        # Extract conversation IDs for batch evaluation
         conversation_ids = [c.conversation_id for c in request.conversations]
         
-        # Get brand policy and prompt
         brand_prompt_path = get_brand_prompt_path(request.brand_id)
         if not brand_prompt_path:
             raise HTTPException(status_code=404, detail=f"Brand '{request.brand_id}' not found.")
         
-        # Load brand policy and prompt
         brand_prompt_text, brand_policy = load_brand_prompt(brand_prompt_path)
         
         results = await evaluate_conversations_high_speed(
@@ -230,7 +212,6 @@ async def evaluate_batch_stream(request: BatchEvaluationRequest):
     Streams per-conversation results as they complete using Server-Sent Events (SSE).
     """
     try:
-        # Validate input
         if not request.conversations:
             raise HTTPException(status_code=400, detail="At least one conversation is required.")
         
@@ -240,23 +221,18 @@ async def evaluate_batch_stream(request: BatchEvaluationRequest):
         queue: asyncio.Queue = asyncio.Queue()
 
         async def stream_callback(result: Dict[str, Any]):
-            # Push each finished result to the queue for streaming
             await queue.put({"type": "item", "data": result})
 
         async def run_evaluation():
             try:
-                # Extract conversation IDs for batch evaluation
                 conversation_ids = [c.conversation_id for c in request.conversations]
                 
-                # Get brand policy and prompt
                 brand_prompt_path = get_brand_prompt_path(request.brand_id)
                 if not brand_prompt_path:
                     await queue.put({"type": "error", "error": f"Brand '{request.brand_id}' not found."})
                     return
                 
-                # Load brand policy and prompt
-                brand_policy = load_brand_policy(request.brand_id)
-                brand_prompt_text = load_brand_prompt_text(brand_prompt_path)
+                brand_prompt_text, brand_policy = load_brand_prompt(brand_prompt_path)
                 
                 results = await evaluate_conversations_high_speed(
                     conversation_ids=conversation_ids,
@@ -283,7 +259,6 @@ async def evaluate_batch_stream(request: BatchEvaluationRequest):
                 await queue.put({"type": "done"})
 
         async def sse_event_generator():
-            # Start evaluation in the background
             asyncio.create_task(run_evaluation())
             # Stream items as they arrive
             while True:
@@ -320,7 +295,6 @@ async def evaluate_bulk_conversations(
     3. Evaluate them using the specified brand
     """
     try:
-        # Validate input
         if not bot_id:
             raise HTTPException(status_code=400, detail="bot_id is required.")
         
@@ -333,15 +307,15 @@ async def evaluate_bulk_conversations(
         if max_concurrency < 1 or max_concurrency > 20:
             raise HTTPException(status_code=400, detail="max_concurrency must be between 1 and 20.")
         
-        # 1. Fetch conversations from external API
         list_base_url = os.getenv("LIST_API_BASE_URL", "https://live-demo.agenticai.pro.vn")
         
         fetch_config = FetchConfig(
             base_url=list_base_url,
             bot_id=bot_id,
             bearer_token=bearer_token,
-            page_size=min(limit * 2, 50),  # Fetch more to have options for selection
-            max_pages=2  # Only fetch 2 pages max
+            page_size=min(limit, 50),  # Chỉ fetch đúng số lượng cần thiết
+            max_pages=2,
+            limit=limit
         )
         
         try:
@@ -352,7 +326,6 @@ async def evaluate_bulk_conversations(
         if not all_conversations:
             return {"message": "No conversations found for the given bot_id.", "results": []}
 
-        # 2. Select conversations
         selected_conversations = select_conversations(
             conversations=all_conversations,
             take=limit,
@@ -362,23 +335,19 @@ async def evaluate_bulk_conversations(
         if not selected_conversations:
             return {"message": "No conversations selected after filtering.", "results": []}
 
-        # 3. Extract conversation IDs for evaluation
         conversation_ids = [conv.get("conversation_id") for conv in selected_conversations]
         
-        # 4. Get brand configuration
         brand_prompt_path = get_brand_prompt_path(brand_id)
         if not brand_prompt_path:
             raise HTTPException(status_code=404, detail=f"Brand '{brand_id}' not found.")
         
         brand_prompt_text, brand_policy = load_brand_prompt(brand_prompt_path)
         
-        # 5. Evaluate conversations
-        # Use single conversation URL for fetching individual messages
         single_base_url = os.getenv("API_BASE_URL", "http://103.141.140.243:14496")
         
         results = await evaluate_conversations_high_speed(
             conversation_ids=conversation_ids,
-            base_url=single_base_url,  # Use single conversation URL for messages
+            base_url=single_base_url,
             rubrics_cfg=rubrics_cfg,
             brand_policy=brand_policy,
             brand_prompt_text=brand_prompt_text,
@@ -392,21 +361,11 @@ async def evaluate_bulk_conversations(
             brand_resolver=brand_resolver
         )
         
-        # 6. Generate summary and insights
         try:
-            # Debug: Log results structure
-            print(f"DEBUG: Results count: {len(results)}")
-            if results:
-                print(f"DEBUG: First result keys: {list(results[0].keys())}")
-                if "error" in results[0]:
-                    print(f"DEBUG: First result error: {results[0]['error']}")
-                if "result" in results[0]:
-                    print(f"DEBUG: First result['result'] keys: {list(results[0]['result'].keys())}")
-            
             summary = make_summary(results)
             insights = generate_insights(summary)
         except Exception as e:
-            # Fallback summary if make_summary fails
+            # Tạo summary dự phòng nếu lỗi
             summary = {
                 "count": len(results),
                 "successful_count": len([r for r in results if "error" not in r]),
@@ -454,7 +413,6 @@ async def test_bearer_token_endpoint(request: dict = Body(...)):
         if not base_url or not bearer_token:
             raise HTTPException(status_code=400, detail="base_url and bearer_token are required")
         
-        # Test token using the existing function
         from tools.bulk_list_evaluate import test_bearer_token
         is_valid = await asyncio.to_thread(test_bearer_token, base_url, bearer_token)
         
@@ -474,15 +432,15 @@ async def fetch_conversations_endpoint(request: dict = Body(...)):
         if not bot_id or not bearer_token:
             raise HTTPException(status_code=400, detail="bot_id and bearer_token are required")
         
-        # Fetch conversations
         list_base_url = os.getenv("LIST_API_BASE_URL", "https://live-demo.agenticai.pro.vn")
         
         fetch_config = FetchConfig(
             base_url=list_base_url,
             bot_id=bot_id,
             bearer_token=bearer_token,
-            page_size=min(limit * 2, 50),
-            max_pages=2
+            page_size=min(limit, 50),  # Chỉ fetch đúng số lượng cần thiết
+            max_pages=2,
+            limit=limit
         )
         
         all_conversations = await asyncio.to_thread(fetch_conversations_with_messages, fetch_config)
@@ -490,7 +448,6 @@ async def fetch_conversations_endpoint(request: dict = Body(...)):
         if not all_conversations:
             return {"conversations": [], "message": "No conversations found"}
         
-        # Select conversations
         selected_conversations = select_conversations(
             conversations=all_conversations,
             take=limit,
@@ -518,17 +475,14 @@ async def evaluate_bulk_raw(request: dict = Body(...)):
         if not conversations:
             raise HTTPException(status_code=400, detail="conversations are required")
         
-        # Get brand configuration
         brand_prompt_path = get_brand_prompt_path(brand_id)
         if not brand_prompt_path:
             raise HTTPException(status_code=404, detail=f"Brand '{brand_id}' not found.")
         
         brand_prompt_text, brand_policy = load_brand_prompt(brand_prompt_path)
         
-        # Use evaluate_many_raw_conversations like Streamlit
         from tools.bulk_list_evaluate import evaluate_many_raw_conversations
         
-        # Get appropriate API key based on model
         if model.startswith("gpt"):
             llm_api_key = os.getenv("OPENAI_API_KEY")
             llm_base_url = "https://api.openai.com/v1"
@@ -548,12 +502,11 @@ async def evaluate_bulk_raw(request: dict = Body(...)):
             llm_base_url=llm_base_url
         )
         
-        # Generate summary and insights
         try:
             summary = make_summary(results)
             insights = generate_insights(summary)
         except Exception as e:
-            # Fallback summary
+            # Tạo summary dự phòng
             summary = {
                 "count": len(results),
                 "successful_count": len([r for r in results if "error" not in r]),
@@ -601,14 +554,12 @@ async def evaluate_bulk_raw_stream(request: dict = Body(...)):
         if not conversations:
             raise HTTPException(status_code=400, detail="conversations are required")
         
-        # Get brand configuration
         brand_prompt_path = get_brand_prompt_path(brand_id)
         if not brand_prompt_path:
             raise HTTPException(status_code=404, detail=f"Brand '{brand_id}' not found.")
         
         brand_prompt_text, brand_policy = load_brand_prompt(brand_prompt_path)
         
-        # Get appropriate API key based on model
         if model.startswith("gpt"):
             llm_api_key = os.getenv("OPENAI_API_KEY")
             llm_base_url = "https://api.openai.com/v1"
@@ -619,20 +570,16 @@ async def evaluate_bulk_raw_stream(request: dict = Body(...)):
         if not llm_api_key:
             raise HTTPException(status_code=400, detail=f"API key not found for model {model}")
         
-        # Use evaluate_many_raw_conversations with streaming
         from tools.bulk_list_evaluate import evaluate_many_raw_conversations
         
         async def stream_callback(result: Dict[str, Any]):
-            # Push each finished result to the queue for streaming
             await result_queue.put({
                 "type": "result",
                 "data": result
             })
         
-        # Create result queue for streaming
         result_queue = asyncio.Queue()
         
-        # Start evaluation in background
         async def run_evaluation():
             try:
                 results = await evaluate_many_raw_conversations(
@@ -645,12 +592,11 @@ async def evaluate_bulk_raw_stream(request: dict = Body(...)):
                     stream_callback=stream_callback
                 )
                 
-                # Generate summary and insights
                 try:
                     summary = make_summary(results)
                     insights = generate_insights(summary)
                 except Exception as e:
-                    # Fallback summary
+                    # Tạo summary dự phòng
                     summary = {
                         "count": len(results),
                         "successful_count": len([r for r in results if "error" not in r]),
@@ -668,7 +614,6 @@ async def evaluate_bulk_raw_stream(request: dict = Body(...)):
                     }
                     insights = [f"⚠️ Lỗi tạo summary: {str(e)}"]
                 
-                # Send final summary
                 await result_queue.put({
                     "type": "summary",
                     "data": {
@@ -682,7 +627,6 @@ async def evaluate_bulk_raw_stream(request: dict = Body(...)):
                     }
                 })
                 
-                # Send completion signal
                 await result_queue.put({
                     "type": "complete",
                     "data": {"message": f"Successfully evaluated {len(results)} conversations"}
@@ -694,7 +638,6 @@ async def evaluate_bulk_raw_stream(request: dict = Body(...)):
                     "data": {"error": str(e)}
                 })
         
-        # Start evaluation task
         evaluation_task = asyncio.create_task(run_evaluation())
         
         async def sse_event_generator():
@@ -714,14 +657,12 @@ async def evaluate_bulk_raw_stream(request: dict = Body(...)):
                             yield f"data: {json.dumps(result)}\n\n"
                             
                     except asyncio.TimeoutError:
-                        # Send keep-alive
                         yield f"data: {json.dumps({'type': 'keepalive', 'data': {}})}\n\n"
                         continue
                         
             except Exception as e:
                 yield f"data: {json.dumps({'type': 'error', 'data': {'error': str(e)}})}\n\n"
             finally:
-                # Clean up
                 if not evaluation_task.done():
                     evaluation_task.cancel()
         
@@ -744,8 +685,6 @@ async def run_benchmark(
     Benchmarks the batch processing system to find the optimal concurrency level.
     """
     try:
-        # TODO: Implement benchmark functionality
-        # For now, return a mock response
         return {
             "message": "Benchmark functionality not yet implemented.",
             "results": {
@@ -758,7 +697,7 @@ async def run_benchmark(
         raise HTTPException(status_code=500, detail=f"An error occurred during benchmarking: {str(e)}")
 
 
-# --- Prompt Doctor API Endpoints ---
+# Prompt Doctor API
 
 class PromptAnalysisRequest(BaseModel):
     """Request model for prompt analysis."""
@@ -775,16 +714,13 @@ async def analyze_prompt_suggestions(request: PromptAnalysisRequest):
         from busqa.prompt_doctor import analyze_prompt_suggestions
         from busqa.brand_specs import load_brand_prompt
         
-        # Load brand prompt
         brand_prompt_path = get_brand_prompt_path(request.brand_id)
         brand_prompt_text, brand_policy_default = load_brand_prompt(brand_prompt_path)
         if not brand_prompt_text:
             raise HTTPException(status_code=404, detail=f"Brand prompt not found for brand: {request.brand_id}")
         
-        # Use provided brand policy or load default
         brand_policy = request.brand_policy or brand_policy_default or ""
         
-        # Analyze prompt suggestions
         result = await analyze_prompt_suggestions(
             evaluation_summary=request.evaluation_summary,
             current_prompt=brand_prompt_text,
@@ -802,10 +738,8 @@ async def analyze_prompt_suggestions(request: PromptAnalysisRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"An error occurred during prompt analysis: {str(e)}")
 
-# Mount static files for frontend
 app.mount("/static", StaticFiles(directory="frontend"), name="static")
 
-# Serve frontend at root
 @app.get("/", include_in_schema=False)
 async def serve_frontend():
     """Serve the main frontend page"""
