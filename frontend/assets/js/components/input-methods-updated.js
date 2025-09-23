@@ -8,6 +8,7 @@ class InputMethods {
         this.container = document.getElementById(containerId);
         this.currentMethod = 'text';
         this.conversations = [];
+        this.kbJson = null;
         this.fileData = null;
         this.bulkConfig = {
             botId: '',
@@ -61,6 +62,18 @@ class InputMethods {
                         <div class="form-text">
                             Enter conversation data in JSON format or plain text.
                         </div>
+                    </div>
+
+                    <div class="mb-3">
+                        <div class="form-check form-switch">
+                            <input class="form-check-input" type="checkbox" id="useKbJsonSwitch">
+                            <label class="form-check-label" for="useKbJsonSwitch">Use KB JSON (optional)</label>
+                        </div>
+                    </div>
+                    <div id="kbJsonContainer" class="mb-3 d-none">
+                        <label for="kbJsonText" class="form-label">KB JSON</label>
+                        <textarea class="form-control" id="kbJsonText" rows="10" placeholder="Paste KB JSON here (optional)"></textarea>
+                        <div class="form-text">If provided, backend will evaluate using this KB instead of brand prompt.</div>
                     </div>
                 </div>
 
@@ -171,6 +184,32 @@ class InputMethods {
             });
         }
 
+        // KB JSON toggle and input
+        const kbSwitch = document.getElementById('useKbJsonSwitch');
+        const kbContainer = document.getElementById('kbJsonContainer');
+        const kbText = document.getElementById('kbJsonText');
+        if (kbSwitch && kbContainer) {
+            kbSwitch.addEventListener('change', (e) => {
+                if (e.target.checked) {
+                    kbContainer.classList.remove('d-none');
+                } else {
+                    kbContainer.classList.add('d-none');
+                    this.kbJson = null;
+                }
+            });
+        }
+        if (kbText) {
+            kbText.addEventListener('input', () => {
+                const val = kbText.value.trim();
+                if (!val) { this.kbJson = null; return; }
+                try {
+                    this.kbJson = JSON.parse(val);
+                } catch (e) {
+                    this.kbJson = null;
+                }
+            });
+        }
+
         // Bulk evaluation buttons
         const fetchBtn = document.getElementById('fetchBulkData');
         if (fetchBtn) {
@@ -210,6 +249,12 @@ class InputMethods {
         if (selectedContent) {
             selectedContent.classList.remove('d-none');
         }
+
+        // Persist KB JSON text across tab switches
+        const kbText = document.getElementById('kbJsonText');
+        if (kbText && this.kbJson) {
+            try { kbText.value = JSON.stringify(this.kbJson, null, 2); } catch (_) {}
+        }
     }
 
     /**
@@ -224,6 +269,13 @@ class InputMethods {
      */
     getConversations() {
         return this.conversations;
+    }
+
+    /**
+     * Get optional KB JSON if provided
+     */
+    getKbJson() {
+        return this.kbJson;
     }
 
     /**

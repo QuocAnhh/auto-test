@@ -73,6 +73,23 @@ class APIClient {
     }
 
     /**
+     * Evaluate single conversation with KB JSON
+     */
+    async evaluateSingleWithKB(conversation, kbJson, model = 'gemini-1.5-flash', temperature = 0.2) {
+        const payload = {
+            conversation: conversation,
+            kb_json: kbJson,
+            model: model,
+            temperature: temperature
+        };
+
+        return await this.request('/evaluate/single-kb', {
+            method: 'POST',
+            body: JSON.stringify(payload)
+        });
+    }
+
+    /**
      * Evaluate batch of conversations
      */
     async evaluateBatch(conversations, brandId, maxConcurrency = 10) {
@@ -256,6 +273,29 @@ class APIClient {
     }
 
     /**
+     * Bulk evaluation with KB JSON
+     */
+    async evaluateBulkWithKB(conversations, kbJson, maxConcurrency, model) {
+        const response = await fetch(`${this.baseUrl}/evaluate/bulk-raw-kb`, {
+            method: 'POST',
+            headers: this.defaultHeaders,
+            body: JSON.stringify({
+                conversations: conversations,
+                kb_json: kbJson,
+                max_concurrency: maxConcurrency,
+                model: model
+            })
+        });
+
+        if (!response.ok) {
+            const errorData = await response.json().catch(() => ({}));
+            throw new Error(errorData.detail || `HTTP ${response.status}: ${response.statusText}`);
+        }
+
+        return await response.json();
+    }
+
+    /**
      * Bulk evaluation with streaming
      */
     async evaluateBulkWithDataStream(conversations, brandId, maxConcurrency, model) {
@@ -276,6 +316,58 @@ class APIClient {
         }
 
         return response;
+    }
+
+    /**
+     * KB streaming evaluation
+     */
+    async evaluateBulkWithKBStream(conversations, kbJson, maxConcurrency, model, onProgress, onComplete, onError) {
+        try {
+            const response = await fetch(`${this.baseUrl}/evaluate/bulk-raw-kb-stream`, {
+                method: 'POST',
+                headers: this.defaultHeaders,
+                body: JSON.stringify({
+                    conversations: conversations,
+                    kb_json: kbJson,
+                    max_concurrency: maxConcurrency,
+                    model: model
+                })
+            });
+
+            if (!response.ok) {
+                throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+            }
+
+            const reader = response.body.getReader();
+            const decoder = new TextDecoder();
+            let buffer = '';
+
+            while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
+
+                buffer += decoder.decode(value, { stream: true });
+                const lines = buffer.split('\n');
+                buffer = lines.pop();
+
+                for (const line of lines) {
+                    if (!line.trim()) continue;
+                    if (line.startsWith('data: ')) {
+                        try {
+                            const data = JSON.parse(line.slice(6));
+                            if (onProgress) onProgress(data);
+                        } catch (e) {
+                            console.warn('Failed to parse SSE data:', line);
+                        }
+                    }
+                }
+            }
+
+            if (onComplete) onComplete();
+        } catch (error) {
+            console.error('KB streaming error:', error);
+            if (onError) onError(error);
+        }
     }
 }
 

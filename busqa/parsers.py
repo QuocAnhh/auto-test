@@ -39,19 +39,16 @@ def extract_bot_id(raw: Any) -> Optional[str]:
         if isinstance(msgs, list):
             for m in msgs:
                 if isinstance(m, dict):
-                    # Kiểm tra bot_id trực tiếp trong message
                     v = m.get("bot_id")
                     if v:
                         return str(v)
                     
-                    # Kiểm tra trong sender info
                     sender = m.get("sender") or {}
                     if isinstance(sender, dict):
                         v = sender.get("bot_id")
                         if v:
                             return str(v)
         
-        # Kiểm tra các trường khác có thể chứa bot info
         for key in ("agent", "thread", "bot", "assistant"):
             obj = raw.get(key)
             if isinstance(obj, dict):
@@ -62,5 +59,4 @@ def extract_bot_id(raw: Any) -> Optional[str]:
         return None
         
     except Exception:
-        # Fail safely - không để lỗi parsing làm crash toàn bộ evaluation
         return None

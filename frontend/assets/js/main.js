@@ -187,6 +187,7 @@ class BusQAApp {
         
         window.errorHandler = this.errorHandler;
         window.resultsTable = this.resultsTable;
+        window.exportManager = this.exportManager;
         window.promptSuggestions = this.promptSuggestions;
         window.streamingResults = this.streamingResults;
         
@@ -285,10 +286,6 @@ class BusQAApp {
         if (this.isEvaluating) return;
 
         const brandId = document.getElementById('brandSelect').value;
-        if (!brandId) {
-            this.showAlert('Please select a brand', 'warning');
-            return;
-        }
 
         const maxConcurrency = parseInt(document.getElementById('maxConcurrency').value);
         const model = document.getElementById('modelSelect').value;
@@ -297,20 +294,35 @@ class BusQAApp {
         const inputMethod = this.inputMethods.getCurrentMethod();
         if (inputMethod === 'bulk') {
             const conversations = this.inputMethods.getConversations();
+            const kbJson = this.inputMethods.getKbJson();
             console.log('Bulk method - conversations:', conversations);
             console.log('Bulk method - conversations length:', conversations ? conversations.length : 'undefined');
             
-            if (conversations && conversations.length > 0) {
-                await this.startBulkEvaluationWithData(conversations, brandId, maxConcurrency, model);
-            } else {
+            if (!conversations || conversations.length === 0) {
                 this.showAlert('Please fetch conversations first using "Fetch Conversations" button', 'warning');
+                return;
             }
+            
+            // If KB JSON provided, we don't require brand for bulk
+            if (!kbJson && !brandId) {
+                this.showAlert('Please select a brand or provide KB JSON', 'warning');
+                return;
+            }
+
+            await this.startBulkEvaluationWithData(conversations, brandId, maxConcurrency, model, kbJson);
             return;
         }
 
         const conversations = this.inputMethods.getConversations();
+        const kbJson = this.inputMethods.getKbJson();
         if (!conversations || conversations.length === 0) {
             this.showAlert('Please provide conversation data', 'warning');
+            return;
+        }
+
+        // Validate mode: if kbJson provided, we can proceed without brand; otherwise require brand
+        if (!kbJson && !brandId) {
+            this.showAlert('Please select a brand or provide KB JSON', 'warning');
             return;
         }
 
@@ -330,20 +342,42 @@ class BusQAApp {
                 maxConcurrency: maxConcurrency
             });
 
-            await this.apiClient.evaluateBatchStream(
-                conversations,
-                brandId,
-                maxConcurrency,
-                (result) => this.handleEvaluationProgress(result),
-                () => this.handleEvaluationComplete(),
-                (error) => this.handleEvaluationError(error)
-            );
+            if (kbJson) {
+                await this.apiClient.evaluateBulkWithKBStream(
+                    conversations,
+                    kbJson,
+                    maxConcurrency,
+                    model,
+                    (data) => {
+                        if (data.type === 'result' && data.data) {
+                            this.handleEvaluationProgress(data.data);
+                        } else if (data.type === 'summary') {
+                            this.currentSummary = data.data;
+                        } else if (data.type === 'error') {
+                            this.handleEvaluationError(new Error(data.data?.error || 'Unknown error'));
+                        } else if (data.type === 'complete') {
+                            this.handleEvaluationComplete();
+                        }
+                    },
+                    () => this.handleEvaluationComplete(),
+                    (error) => this.handleEvaluationError(error)
+                );
+            } else {
+                await this.apiClient.evaluateBatchStream(
+                    conversations,
+                    brandId,
+                    maxConcurrency,
+                    (result) => this.handleEvaluationProgress(result),
+                    () => this.handleEvaluationComplete(),
+                    (error) => this.handleEvaluationError(error)
+                );
+            }
         } catch (error) {
             this.handleEvaluationError(error);
         }
     }
 
-    async startBulkEvaluationWithData(conversations, brandId, maxConcurrency, model) {
+    async startBulkEvaluationWithData(conversations, brandId, maxConcurrency, model, kbJson = null) {
         if (!this.apiClient || typeof this.apiClient.evaluateBulk !== 'function') {
             console.error('APIClient or evaluateBulk method not available:', this.apiClient);
             this.showAlert('API Client not properly initialized', 'error');
@@ -366,84 +400,106 @@ class BusQAApp {
             });
 
             
-            const response = await this.apiClient.evaluateBulkWithDataStream(
-                conversations,
-                brandId,
-                maxConcurrency,
-                model
-            );
-
-            // Process streaming response
-            const decoder = new TextDecoder();
-            let buffer = '';
-            
-            // Create reader once and reuse it
-            const reader = response.body.getReader();
-
-            try {
-                while (true) {
-                    const { done, value } = await reader.read();
-                    
-                    if (done) break;
-                    
-                    buffer += decoder.decode(value, { stream: true });
-                    const lines = buffer.split('\n');
-                    buffer = lines.pop(); // Keep incomplete line in buffer
-
-                    for (const line of lines) {
-                        if (line.trim() === '') continue;
-                        
-                        if (line.startsWith('data: ')) {
-                            try {
-                                const data = JSON.parse(line.slice(6));
-                                console.log('📡 Raw SSE data:', data);
-                                
-                                // Handle different data types from backend
-                                if (data.type === 'result' && data.data) {
-                                    // Backend sends: {"type": "result", "data": actualResult}
-                                    this.handleEvaluationProgress(data.data);
-                                } else if (data.type === 'keepalive') {
-                                    // Keep-alive message, ignore
-                                    continue;
-                                } else if (data.type === 'summary') {
-                                    // Summary data, store for later
-                                    this.currentSummary = data.data;
-                                    continue;
-                                } else if (data.type === 'complete') {
-                                    // Evaluation complete
-                                    this.handleEvaluationComplete();
-                                    return;
-                                } else if (data.type === 'error') {
-                                    // Error occurred
-                                    this.handleEvaluationError(new Error(data.data?.error || 'Unknown error'));
-                                    return;
-                                } else {
-                                    // Direct result data (fallback)
-                                    this.handleEvaluationProgress(data);
-                                }
-                            } catch (e) {
-                                console.warn('Failed to parse SSE data:', line);
-                            }
-                        } else if (line.startsWith('event: summary')) {
-                            // Handle summary event
-                            continue;
-                        } else if (line.startsWith('event: error')) {
-                            try {
-                                const errorData = JSON.parse(line.slice(6));
-                                this.handleEvaluationError(new Error(errorData.message));
-                            } catch (e) {
-                                this.handleEvaluationError(new Error('Unknown error occurred'));
-                            }
-                            return;
-                        } else if (line.startsWith('event: end')) {
+            if (kbJson) {
+                await this.apiClient.evaluateBulkWithKBStream(
+                    conversations,
+                    kbJson,
+                    maxConcurrency,
+                    model,
+                    (data) => {
+                        if (data.type === 'result' && data.data) {
+                            this.handleEvaluationProgress(data.data);
+                        } else if (data.type === 'summary') {
+                            this.currentSummary = data.data;
+                        } else if (data.type === 'error') {
+                            this.handleEvaluationError(new Error(data.data?.error || 'Unknown error'));
+                        } else if (data.type === 'complete') {
                             this.handleEvaluationComplete();
-                            return;
+                        }
+                    },
+                    () => this.handleEvaluationComplete(),
+                    (error) => this.handleEvaluationError(error)
+                );
+            } else {
+                const response = await this.apiClient.evaluateBulkWithDataStream(
+                    conversations,
+                    brandId,
+                    maxConcurrency,
+                    model
+                );
+
+                // Process streaming response
+                const decoder = new TextDecoder();
+                let buffer = '';
+                
+                // Create reader once and reuse it
+                const reader = response.body.getReader();
+
+                try {
+                    while (true) {
+                        const { done, value } = await reader.read();
+                        
+                        if (done) break;
+                        
+                        buffer += decoder.decode(value, { stream: true });
+                        const lines = buffer.split('\n');
+                        buffer = lines.pop(); // Keep incomplete line in buffer
+
+                        for (const line of lines) {
+                            if (line.trim() === '') continue;
+                            
+                            if (line.startsWith('data: ')) {
+                                try {
+                                    const data = JSON.parse(line.slice(6));
+                                    console.log('📡 Raw SSE data:', data);
+                                    
+                                    // Handle different data types from backend
+                                    if (data.type === 'result' && data.data) {
+                                        // Backend sends: {"type": "result", "data": actualResult}
+                                        this.handleEvaluationProgress(data.data);
+                                    } else if (data.type === 'keepalive') {
+                                        // Keep-alive message, ignore
+                                        continue;
+                                    } else if (data.type === 'summary') {
+                                        // Summary data, store for later
+                                        this.currentSummary = data.data;
+                                        continue;
+                                    } else if (data.type === 'complete') {
+                                        // Evaluation complete
+                                        this.handleEvaluationComplete();
+                                        return;
+                                    } else if (data.type === 'error') {
+                                        // Error occurred
+                                        this.handleEvaluationError(new Error(data.data?.error || 'Unknown error'));
+                                        return;
+                                    } else {
+                                        // Direct result data (fallback)
+                                        this.handleEvaluationProgress(data);
+                                    }
+                                } catch (e) {
+                                    console.warn('Failed to parse SSE data:', line);
+                                }
+                            } else if (line.startsWith('event: summary')) {
+                                // Handle summary event
+                                continue;
+                            } else if (line.startsWith('event: error')) {
+                                try {
+                                    const errorData = JSON.parse(line.slice(6));
+                                    this.handleEvaluationError(new Error(errorData.message));
+                                } catch (e) {
+                                    this.handleEvaluationError(new Error('Unknown error occurred'));
+                                }
+                                return;
+                            } else if (line.startsWith('event: end')) {
+                                this.handleEvaluationComplete();
+                                return;
+                            }
                         }
                     }
+                } finally {
+                    // Release the reader
+                    reader.releaseLock();
                 }
-            } finally {
-                // Release the reader
-                reader.releaseLock();
             }
 
         } catch (error) {
@@ -751,17 +807,23 @@ class BusQAApp {
         }
 
         const brandId = document.getElementById('brandSelect').value;
-        if (!brandId) {
-            this.showAlert('Please select a brand first', 'warning');
-            return;
-        }
+        const kbJson = this.inputMethods?.getKbJson?.() || null;
 
         try {
             // Create evaluation summary from current results
             const summary = this.createEvaluationSummary(this.currentResults);
             
-            // Load prompt suggestions
-            await this.promptSuggestions.loadSuggestions(brandId, summary);
+            if (kbJson) {
+                // When KB JSON mode, allow analyze without brand: send current_prompt from KB if present
+                const currentPrompt = kbJson.current_prompt || kbJson.prompt || kbJson.brand_prompt || null;
+                await this.promptSuggestions.loadSuggestionsFlexible({
+                    brandId: brandId || null,
+                    currentPrompt,
+                    evaluationSummary: summary
+                });
+            } else {
+                await this.promptSuggestions.loadSuggestions(brandId, summary);
+            }
             
             this.showAlert('Prompt analysis completed!', 'success');
         } catch (error) {

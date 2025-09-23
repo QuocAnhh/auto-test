@@ -34,7 +34,8 @@ class PromptDoctor:
                 self.llm_client = None
     
     def build_analysis_prompt(self, evaluation_summary: Dict[str, Any], 
-                            current_prompt: str, brand_policy: str) -> str:
+                            current_prompt: str, brand_policy: str,
+                            results: Optional[List[Dict[str, Any]]] = None) -> str:
         """
         Build the system prompt for LLM-based prompt analysis.
         
@@ -57,6 +58,28 @@ class PromptDoctor:
             "empathy_experience": "Thể hiện sự đồng cảm và tạo trải nghiệm tích cực"
         }
         
+        # Optional evidence bundle from raw results (top-N)
+        evidence_text = ""
+        if results:
+            try:
+                # Keep it compact: only keys that help locate issues
+                slimmed = []
+                for r in results[:10]:
+                    slimmed.append({
+                        "conversation_id": r.get("conversation_id"),
+                        "result": {
+                            "detected_flow": r.get("result", {}).get("detected_flow"),
+                            "criteria": r.get("result", {}).get("criteria"),
+                            "tags": r.get("result", {}).get("tags"),
+                            "risks": r.get("result", {}).get("risks")
+                        },
+                        "metrics": r.get("metrics"),
+                        "transcript_preview": r.get("transcript_preview", "")[:300]
+                    })
+                evidence_text = json.dumps(slimmed, ensure_ascii=False, indent=2)
+            except Exception:
+                evidence_text = "[]"
+
         return f"""
 Bạn là một chuyên gia phân tích và tối ưu hóa prompt cho chatbot. Nhiệm vụ của bạn là:
 
@@ -78,6 +101,11 @@ Bạn là một chuyên gia phân tích và tối ưu hóa prompt cho chatbot. N
 - Brand Policy: 
 ```
 {brand_policy}
+```
+
+- Evidence (top conversations, compact):
+```
+{evidence_text}
 ```
 
 ## OUTPUT FORMAT (JSON):
@@ -116,11 +144,14 @@ Bạn là một chuyên gia phân tích và tối ưu hóa prompt cho chatbot. N
       ]
     }}
   ],
-  "summary": "tóm tắt các thay đổi cần thiết dựa trên patterns"
+  "summary": "tóm tắt các thay đổi cần thiết dựa trên patterns",
+  "test_cases": [
+    {{"user_utterance": "...", "expected_routing": "...", "expected_slots": ["..."]}}
+  ]
 }}
 
 ## QUY TẮC QUAN TRỌNG:
-- Phân tích dựa trên patterns trong evaluation summary, không phải từng conversation riêng lẻ
+- Ưu tiên dựa trên summary; có thể dùng evidence để chỉ ra vị trí cụ thể
 - Chỉ ra chính xác dòng/đoạn nào trong prompt cần sửa (line_range)
 - Đưa ra code/text thay thế cụ thể, không chỉ gợi ý chung chung
 - Ưu tiên các vấn đề có tác động lớn nhất đến điểm số
@@ -131,7 +162,8 @@ Bạn là một chuyên gia phân tích và tối ưu hóa prompt cho chatbot. N
 """
     
     async def analyze_prompt_issues(self, evaluation_summary: Dict[str, Any], 
-                                  current_prompt: str, brand_policy: str = "") -> Dict[str, Any]:
+                                  current_prompt: str, brand_policy: str = "",
+                                  results: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
         """
         Analyze prompt issues based on evaluation summary.
         
@@ -144,7 +176,7 @@ Bạn là một chuyên gia phân tích và tối ưu hóa prompt cho chatbot. N
             Dictionary containing analysis results and suggestions
         """
         try:
-            analysis_prompt = self.build_analysis_prompt(evaluation_summary, current_prompt, brand_policy)
+            analysis_prompt = self.build_analysis_prompt(evaluation_summary, current_prompt, brand_policy, results)
             
             # Call LLM for analysis
             if self.llm_client:
@@ -154,7 +186,7 @@ Bạn là một chuyên gia phân tích và tối ưu hóa prompt cho chatbot. N
                 llm_response = await self.llm_client.call_async(
                     model=model,
                     system_prompt=analysis_prompt,
-                    user_prompt="Phân tích prompt và đưa ra gợi ý cải thiện dựa trên evaluation summary."
+                    user_prompt="Phân tích prompt, chỉ rõ lỗi gốc và trả edits cụ thể theo JSON schema."
                 )
                 
                 if self.validate_analysis_result(llm_response):
@@ -357,7 +389,8 @@ Bạn là một chuyên gia phân tích và tối ưu hóa prompt cho chatbot. N
 async def analyze_prompt_suggestions(evaluation_summary: Dict[str, Any], 
                                    current_prompt: str, 
                                    brand_policy: str = "",
-                                   llm_client=None) -> Dict[str, Any]:
+                                   llm_client=None,
+                                   results: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
     """
     Convenience function to analyze prompt suggestions.
     
@@ -371,5 +404,5 @@ async def analyze_prompt_suggestions(evaluation_summary: Dict[str, Any],
         Dictionary containing analysis results and suggestions
     """
     doctor = PromptDoctor(llm_client)
-    result = await doctor.analyze_prompt_issues(evaluation_summary, current_prompt, brand_policy)
+    result = await doctor.analyze_prompt_issues(evaluation_summary, current_prompt, brand_policy, results)
     return doctor.validate_analysis_result(result)

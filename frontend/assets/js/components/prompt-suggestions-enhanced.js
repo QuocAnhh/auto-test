@@ -717,6 +717,45 @@ class PromptSuggestionsEnhanced {
         }
     }
 
+    /**
+     * Flexible loader: supports brandId or currentPrompt
+     */
+    async loadSuggestionsFlexible({ brandId = null, currentPrompt = null, evaluationSummary }) {
+        try {
+            this.container.innerHTML = `
+                <div class="text-center py-4">
+                    <div class="spinner-border text-primary" role="status">
+                        <span class="visually-hidden">Loading...</span>
+                    </div>
+                    <p class="mt-2">Analyzing prompt suggestions...</p>
+                </div>
+            `;
+
+            const body = {
+                evaluation_summary: evaluationSummary
+            };
+
+            if (brandId) body.brand_id = brandId;
+            if (!brandId && currentPrompt) body.current_prompt = currentPrompt;
+
+            const response = await this.apiClient.request('/analyze/prompt-suggestions', {
+                method: 'POST',
+                body: JSON.stringify(body)
+            });
+
+            this.suggestionsData = response;
+            this.render();
+        } catch (error) {
+            console.error('Error loading suggestions (flexible):', error);
+            this.container.innerHTML = `
+                <div class="alert alert-danger">
+                    <h5>Error Loading Suggestions</h5>
+                    <p>${error.message}</p>
+                </div>
+            `;
+        }
+    }
+
     setupEventListeners() {
         // Add any additional event listeners here
     }

@@ -7,7 +7,7 @@ class ExportManager {
     constructor(containerId) {
         this.container = document.getElementById(containerId);
         this.data = null;
-        this.exportFormats = ['csv', 'excel', 'pdf'];
+        this.exportFormats = ['csv', 'excel', 'pdf', 'json'];
     }
 
     /**
@@ -43,7 +43,7 @@ class ExportManager {
                         </div>
                         <div class="card-body">
                             <div class="row">
-                                <div class="col-md-4 mb-3">
+                                <div class="col-md-3 mb-3">
                                     <div class="card h-100">
                                         <div class="card-body text-center">
                                             <i class="bi bi-file-earmark-spreadsheet display-4 text-success"></i>
@@ -55,7 +55,7 @@ class ExportManager {
                                         </div>
                                     </div>
                                 </div>
-                                <div class="col-md-4 mb-3">
+                                <div class="col-md-3 mb-3">
                                     <div class="card h-100">
                                         <div class="card-body text-center">
                                             <i class="bi bi-file-earmark-pdf display-4 text-danger"></i>
@@ -67,7 +67,7 @@ class ExportManager {
                                         </div>
                                     </div>
                                 </div>
-                                <div class="col-md-4 mb-3">
+                                <div class="col-md-3 mb-3">
                                     <div class="card h-100">
                                         <div class="card-body text-center">
                                             <i class="bi bi-file-earmark-text display-4 text-primary"></i>
@@ -75,6 +75,18 @@ class ExportManager {
                                             <p class="text-muted">Simple CSV format for data analysis</p>
                                             <button class="btn btn-primary" onclick="exportManager.exportCSV()">
                                                 <i class="bi bi-download"></i> Export CSV
+                                            </button>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="col-md-3 mb-3">
+                                    <div class="card h-100">
+                                        <div class="card-body text-center">
+                                            <i class="bi bi-filetype-json display-4 text-dark"></i>
+                                            <h5 class="mt-3">JSON Export</h5>
+                                            <p class="text-muted">Export full raw results as JSON</p>
+                                            <button class="btn btn-dark" onclick="exportManager.exportJSON()">
+                                                <i class="bi bi-download"></i> Export JSON
                                             </button>
                                         </div>
                                     </div>
@@ -288,6 +300,27 @@ class ExportManager {
         } catch (error) {
             console.error('CSV export error:', error);
             this.showExportError('Failed to export CSV file');
+        }
+    }
+
+    /**
+     * Export to JSON (full raw results)
+     */
+    exportJSON() {
+        try {
+            this.showExportProgress('Preparing JSON export...');
+
+            const jsonString = JSON.stringify(this.data || [], null, 2);
+            const blob = new Blob([jsonString], { type: 'application/json;charset=utf-8;' });
+
+            const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+            this.downloadBlob(blob, `evaluation_results_${timestamp}.json`);
+            this.addToExportHistory('json', this.getFileSize(blob));
+            this.hideExportProgress();
+
+        } catch (error) {
+            console.error('JSON export error:', error);
+            this.showExportError('Failed to export JSON file');
         }
     }
 

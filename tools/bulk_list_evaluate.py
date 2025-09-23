@@ -28,7 +28,7 @@ from busqa.metrics import (
     compute_policy_violations_count, filter_non_null_metrics
 )
 from busqa.prompt_loader import load_unified_rubrics
-from busqa.brand_specs import load_brand_prompt
+from busqa.brand_specs import load_brand_prompt, build_brand_from_kb_json, BrandPolicy
 from busqa.prompting import build_system_prompt_unified, build_user_instruction
 from busqa.llm_client import call_llm
 from busqa.batch_evaluator import evaluate_conversations_high_speed
@@ -309,7 +309,10 @@ def evaluate_conversation_from_raw(
     temperature: float = 0.2,
     apply_diagnostics: bool = True,
     llm_api_key: str = None,
-    llm_base_url: str = None
+    llm_base_url: str = None,
+    kb_json: Optional[Dict[str, Any]] = None,
+    override_brand_prompt_text: Optional[str] = None,
+    override_brand_policy: Optional[BrandPolicy] = None
 ) -> Dict[str, Any]:
     """
     Evaluate a single conversation using the existing pipeline.
@@ -334,7 +337,13 @@ def evaluate_conversation_from_raw(
     try:
         # Load configurations
         rubrics_cfg = load_unified_rubrics(rubrics)
-        brand_prompt_text, brand_policy = load_brand_prompt(brand_prompt_path)
+        # Determine knowledge source: overrides > kb_json > prompt file
+        if override_brand_prompt_text is not None and override_brand_policy is not None:
+            brand_prompt_text, brand_policy = override_brand_prompt_text, override_brand_policy
+        elif kb_json is not None:
+            brand_prompt_text, brand_policy = build_brand_from_kb_json(kb_json)
+        else:
+            brand_prompt_text, brand_policy = load_brand_prompt(brand_prompt_path)
         
         # Get diagnostics config if needed
         diagnostics_cfg = None
@@ -401,17 +410,19 @@ def evaluate_conversation_from_raw(
             diagnostics_hits=diagnostics_hits
         )
         
-        # Extract brand_id from brand_prompt_path
+        # Extract brand_id from brand_prompt_path (best-effort). If kb_json used, try agent_name
         brand_id = "unknown"
-        if brand_prompt_path:
-            brand_parts = brand_prompt_path.split(os.sep)
-            if "brands" in brand_parts:
-                try:
+        try:
+            if kb_json and kb_json.get("agent_name"):
+                brand_id = str(kb_json.get("agent_name")).strip()
+            elif brand_prompt_path:
+                brand_parts = brand_prompt_path.split(os.sep)
+                if "brands" in brand_parts:
                     brand_idx = brand_parts.index("brands")
                     if brand_idx + 1 < len(brand_parts):
                         brand_id = brand_parts[brand_idx + 1]
-                except:
-                    pass
+        except Exception:
+            pass
         
         # Return same format as evaluate_cli.py
         return {
@@ -443,7 +454,10 @@ async def evaluate_many_raw_conversations(
     llm_api_key: str = None,
     llm_base_url: str = None,
     max_concurrency: int = 5,
-    stream_callback: Optional[callable] = None
+    stream_callback: Optional[callable] = None,
+    kb_json: Optional[Dict[str, Any]] = None,
+    override_brand_prompt_text: Optional[str] = None,
+    override_brand_policy: Optional[BrandPolicy] = None
 ) -> List[Dict[str, Any]]:
     """
     Evaluate multiple conversations concurrently with error handling.
@@ -480,7 +494,10 @@ async def evaluate_many_raw_conversations(
                     temperature,
                     apply_diagnostics,
                     llm_api_key,
-                    llm_base_url
+                    llm_base_url,
+                    kb_json,
+                    override_brand_prompt_text,
+                    override_brand_policy
                 )
                 
                 if "error" not in result:

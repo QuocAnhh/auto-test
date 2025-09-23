@@ -95,6 +95,13 @@ class BulkListRequest(BaseModel):
     )
     bearer_token: str = Field(..., description="Bearer token for the external API.")
 
+
+class SingleEvaluationKBRequest(BaseModel):
+    conversation: Conversation
+    kb_json: Dict[str, Any] = Field(..., description="Structured brand KB JSON to use for evaluation")
+    model: str = Field(default="gemini-1.5-flash", description="The model to use for evaluation.")
+    temperature: float = Field(default=0.2, description="The temperature to use for evaluation.")
+
 @app.on_event("startup")
 async def startup_event():
     if not all([rubrics_cfg, diagnostics_cfg, brand_resolver, llm_client, available_brands]):
@@ -150,6 +157,33 @@ async def evaluate_single(request: SingleEvaluationRequest):
             brand_prompt_path=brand_prompt_path,
             model=request.model,
             temperature=request.temperature,
+        )
+        return result
+    except HTTPException as he:
+        raise he
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"An unexpected error occurred: {str(e)}")
+
+
+@app.post("/evaluate/single-kb", summary="Evaluate a Single Conversation using KB JSON")
+async def evaluate_single_kb(request: SingleEvaluationKBRequest):
+    """
+    Evaluates a single conversation using a provided KB JSON as brand knowledge source.
+    Does not modify existing brand/prompt flows.
+    """
+    try:
+        if not request.conversation.messages:
+            raise HTTPException(status_code=400, detail="Conversation must have at least one message.")
+
+        conversation_data = request.conversation.dict()
+
+        result = await asyncio.to_thread(
+            evaluate_conversation_from_raw,
+            raw_conv=conversation_data,
+            brand_prompt_path="",  # Unused when kb_json is provided
+            model=request.model,
+            temperature=request.temperature,
+            kb_json=request.kb_json
         )
         return result
     except HTTPException as he:
@@ -542,6 +576,151 @@ async def evaluate_bulk_raw(request: dict = Body(...)):
         raise HTTPException(status_code=500, detail=f"An unexpected error occurred during bulk evaluation: {str(e)}")
 
 
+@app.post("/evaluate/bulk-raw-kb", summary="Bulk Evaluation with Raw Data and KB JSON")
+async def evaluate_bulk_raw_kb(request: dict = Body(...)):
+    """Evaluate conversations with a provided KB JSON (no brand file)."""
+    try:
+        conversations = request.get("conversations", [])
+        kb_json = request.get("kb_json")
+        max_concurrency = request.get("max_concurrency", 2)
+        model = request.get("model", "gemini-1.5-flash")
+
+        if not conversations:
+            raise HTTPException(status_code=400, detail="conversations are required")
+        if not kb_json:
+            raise HTTPException(status_code=400, detail="kb_json is required")
+
+        from tools.bulk_list_evaluate import evaluate_many_raw_conversations
+
+        if model.startswith("gpt"):
+            llm_api_key = os.getenv("OPENAI_API_KEY")
+            llm_base_url = "https://api.openai.com/v1"
+        else:
+            llm_api_key = os.getenv("GEMINI_API_KEY")
+            llm_base_url = os.getenv("LLM_BASE_URL")
+
+        if not llm_api_key:
+            raise HTTPException(status_code=400, detail=f"API key not found for model {model}")
+
+        results = await evaluate_many_raw_conversations(
+            raw_conversations=conversations,
+            brand_prompt_path="",  # unused with kb_json
+            max_concurrency=max_concurrency,
+            model=model,
+            llm_api_key=llm_api_key,
+            llm_base_url=llm_base_url,
+            kb_json=kb_json
+        )
+
+        try:
+            summary = make_summary(results)
+            insights = generate_insights(summary)
+        except Exception as e:
+            summary = {
+                "count": len(results),
+                "successful_count": len([r for r in results if "error" not in r]),
+                "error_count": len([r for r in results if "error" in r]),
+                "errors": [r for r in results if "error" in r],
+                "avg_total_score": 0,
+                "median_total_score": 0,
+                "std_total_score": 0,
+                "criteria_avg": {},
+                "diagnostics_top": [],
+                "flow_distribution": {},
+                "policy_violation_rate": 0,
+                "metrics_overview": {},
+                "latency_stats": {}
+            }
+            insights = [f"⚠️ Lỗi tạo summary: {str(e)}"]
+
+        return {
+            "message": f"Successfully evaluated {len(results)} conversations",
+            "summary": summary,
+            "insights": insights,
+            "results": results,
+            "metadata": {
+                "kb_based": True,
+                "total_conversations": len(conversations),
+                "evaluated_count": len(results)
+            }
+        }
+    except HTTPException as he:
+        raise he
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"An unexpected error occurred during KB bulk evaluation: {str(e)}")
+
+
+@app.post("/evaluate/bulk-raw-kb-stream", summary="Bulk Evaluation with KB JSON (Streaming)")
+async def evaluate_bulk_raw_kb_stream(request: dict = Body(...)):
+    """Stream evaluation results using KB JSON via SSE."""
+    try:
+        conversations = request.get("conversations", [])
+        kb_json = request.get("kb_json")
+        max_concurrency = request.get("max_concurrency", 2)
+        model = request.get("model", "gemini-1.5-flash")
+
+        if not conversations:
+            raise HTTPException(status_code=400, detail="conversations are required")
+        if not kb_json:
+            raise HTTPException(status_code=400, detail="kb_json is required")
+
+        if model.startswith("gpt"):
+            llm_api_key = os.getenv("OPENAI_API_KEY")
+            llm_base_url = "https://api.openai.com/v1"
+        else:
+            llm_api_key = os.getenv("GEMINI_API_KEY")
+            llm_base_url = os.getenv("LLM_BASE_URL")
+
+        if not llm_api_key:
+            raise HTTPException(status_code=400, detail=f"API key not found for model {model}")
+
+        queue: asyncio.Queue = asyncio.Queue()
+
+        async def stream_callback(result: Dict[str, Any]):
+            await queue.put({"type": "result", "data": result})
+
+        async def run_evaluation():
+            try:
+                from tools.bulk_list_evaluate import evaluate_many_raw_conversations
+                results = await evaluate_many_raw_conversations(
+                    raw_conversations=conversations,
+                    brand_prompt_path="",
+                    max_concurrency=max_concurrency,
+                    model=model,
+                    llm_api_key=llm_api_key,
+                    llm_base_url=llm_base_url,
+                    kb_json=kb_json,
+                    stream_callback=stream_callback
+                )
+                summary = make_summary(results)
+                insights = generate_insights(summary)
+                await queue.put({"type": "summary", "data": {"summary": summary, "insights": insights}})
+            except Exception as e:
+                await queue.put({"type": "error", "error": str(e)})
+            finally:
+                await queue.put({"type": "done"})
+
+        async def sse_event_generator():
+            asyncio.create_task(run_evaluation())
+            while True:
+                event = await queue.get()
+                if event.get("type") == "result":
+                    yield f"data: {json.dumps(event)}\n\n"
+                elif event.get("type") == "summary":
+                    yield f"data: {json.dumps({"type": "summary", "data": event['data']})}\n\n"
+                elif event.get("type") == "error":
+                    yield f"data: {json.dumps({"type": "error", "data": {"error": event['error']}})}\n\n"
+                elif event.get("type") == "done":
+                    yield f"data: {json.dumps({"type": "complete", "data": {"message": "done"}})}\n\n"
+                    break
+
+        return StreamingResponse(sse_event_generator(), media_type="text/event-stream")
+    except HTTPException as he:
+        raise he
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to start KB streaming evaluation: {str(e)}")
+
+
 @app.post("/evaluate/bulk-raw-stream", summary="Bulk Evaluation with Raw Data (Streaming)")
 async def evaluate_bulk_raw_stream(request: dict = Body(...)):
     """Evaluate conversations using raw data with streaming (SSE)"""
@@ -702,8 +881,10 @@ async def run_benchmark(
 class PromptAnalysisRequest(BaseModel):
     """Request model for prompt analysis."""
     evaluation_summary: Dict[str, Any] = Field(..., description="Evaluation summary from make_summary()")
-    brand_id: str = Field(..., description="Brand ID to analyze prompt for")
+    brand_id: Optional[str] = Field(None, description="Brand ID to analyze prompt for")
+    current_prompt: Optional[str] = Field(None, description="Raw prompt content to analyze (used when no brand_id)")
     brand_policy: Optional[str] = Field(None, description="Optional brand policy text")
+    results: Optional[List[Dict[str, Any]]] = Field(None, description="Optional raw per-conversation results for evidence (top-N)")
 
 @app.post("/analyze/prompt-suggestions", summary="Analyze Prompt and Get Improvement Suggestions")
 async def analyze_prompt_suggestions(request: PromptAnalysisRequest):
@@ -713,18 +894,28 @@ async def analyze_prompt_suggestions(request: PromptAnalysisRequest):
     try:
         from busqa.prompt_doctor import analyze_prompt_suggestions
         from busqa.brand_specs import load_brand_prompt
-        
-        brand_prompt_path = get_brand_prompt_path(request.brand_id)
-        brand_prompt_text, brand_policy_default = load_brand_prompt(brand_prompt_path)
-        if not brand_prompt_text:
-            raise HTTPException(status_code=404, detail=f"Brand prompt not found for brand: {request.brand_id}")
-        
-        brand_policy = request.brand_policy or brand_policy_default or ""
-        
+
+        current_prompt_text: Optional[str] = None
+        brand_policy_text: str = request.brand_policy or ""
+
+        if request.brand_id:
+            brand_prompt_path = get_brand_prompt_path(request.brand_id)
+            brand_prompt_text, brand_policy_default = load_brand_prompt(brand_prompt_path)
+            if not brand_prompt_text:
+                raise HTTPException(status_code=404, detail=f"Brand prompt not found for brand: {request.brand_id}")
+            current_prompt_text = brand_prompt_text
+            if not brand_policy_text:
+                brand_policy_text = brand_policy_default or ""
+        elif request.current_prompt:
+            current_prompt_text = request.current_prompt
+        else:
+            raise HTTPException(status_code=400, detail="Either brand_id or current_prompt must be provided")
+
         result = await analyze_prompt_suggestions(
             evaluation_summary=request.evaluation_summary,
-            current_prompt=brand_prompt_text,
-            brand_policy=brand_policy
+            current_prompt=current_prompt_text,
+            brand_policy=brand_policy_text,
+            results=request.results
         )
         
         return {
